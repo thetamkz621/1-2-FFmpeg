@@ -1,4 +1,15 @@
-/Dockerfile*
+# Native build workspace / output
+/.ffbuild/
 /ffbuild/
 /artifacts/
 /.cache/
+/Dockerfile*
+
+# Local scratch
+/tmp/
+*.tar.xz
+*.zip
+# Generated toolchain descriptor files (see native/env.sh)
+/toolchain/generated/
+# Transient per-stage /patches target
+/patches-current/

@@ -1,0 +1,39 @@
+#!/bin/bash
+set -e
+#
+# gen-implib — build an import library (.a) from a shared library (.so).
+#
+# Ported from upstream images/base-linux64/gen-implib.sh (which the Docker image
+# installed as /usr/bin/gen-implib). Used by the 45-x11 and 50-vaapi stages to
+# produce static import libs for the X11/VAAPI shared libraries.
+#
+# Difference from upstream: the compiler/archiver come from $CC/$AR so that
+# user compiler overrides (e.g. CC=clang) are honoured. Upstream hard-coded
+# ${FFBUILD_CROSS_PREFIX}gcc / ${FFBUILD_CROSS_PREFIX}ar, which equals $CC/$AR
+# in both of our toolchain modes anyway.
+#
+# Usage: gen-implib <libfoo.so.N> <libfoo.a>
+
+if [[ $# != 2 ]]; then
+    echo "usage: gen-implib <in.so> <out.a>" >&2
+    exit 1
+fi
+
+IN="$1"
+OUT="$2"
+IMPLIB_DIR="${FFBUILD_IMPLIB_DIR:-/opt/implib}"
+
+if [[ ! -f "$IMPLIB_DIR/implib-gen.py" ]]; then
+    echo "gen-implib: $IMPLIB_DIR/implib-gen.py not found (run native/setup.sh)" >&2
+    exit 1
+fi
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+cd "$TMPDIR"
+
+set -x
+python3 "$IMPLIB_DIR/implib-gen.py" --target x86_64-linux-gnu --dlopen --lazy-load --verbose "$IN"
+# shellcheck disable=SC2086
+"${CC:-${FFBUILD_CROSS_PREFIX}gcc}" $CFLAGS $STAGE_CFLAGS -Wa,--noexecstack -DIMPLIB_HIDDEN_SHIMS -c ./*.tramp.S ./*.init.c
+"${AR:-${FFBUILD_CROSS_PREFIX}ar}" -rcs "$OUT" ./*.tramp.o ./*.init.o

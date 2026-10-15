@@ -34,7 +34,13 @@ ffbuild_dockerbuild() {
         return -1
     fi
 
-    cp -al "$DESTDIR"/. "$FFBUILD_DESTDIR"
+    # LOCAL DEVIATION from upstream FFmpeg-Builds:
+    #   upstream uses `cp -al` (hard links), which assumes /tmp/staging and the
+    #   build prefix live on the same filesystem (true inside the build
+    #   container). On a normal host /tmp is tmpfs, so hard-linking fails with
+    #   EXDEV ("Invalid cross-device link"). A plain recursive copy is
+    #   equivalent apart from disk/time cost.
+    cp -a "$DESTDIR"/. "$FFBUILD_DESTDIR"
     rm -rf "$DESTDIR"
     unset DESTDIR
 

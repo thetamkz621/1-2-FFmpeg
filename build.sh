@@ -1,88 +1,319 @@
 #!/bin/bash
-set -xe
+# shellcheck shell=bash
+#
+# build.sh — Docker-free linux64 build driver for FFmpeg-Builds.
+#
+# Replaces upstream makeimage.sh + generate.sh + build.sh (the container run).
+#
+# Usage:
+#   ./build.sh linux64 gpl [addin ...]
+#   ./build.sh linux64 lgpl 8.1
+#   ./build.sh linux64 gpl-shared debug
+#
+# Flags / environment:
+#   FFBUILD_DEPS_ONLY=1     build dependencies only
+#   FFBUILD_FFMPEG_ONLY=1   skip dependencies (reuse existing prefix)
+#   FFBUILD_SKIP_DOWNLOAD=1 do not refresh the download cache
+#   FFBUILD_CLEAN=1         wipe FFBUILD_ROOT before building
+#   FFBUILD_FORCE=1         rebuild all stages (ignore resume state)
+#   CC/CXX/LDFLAGS/...      compiler & flag overrides (see native/env.sh)
+#
+set -eo pipefail
 shopt -s globstar
 cd "$(dirname "$0")"
-source util/vars.sh
 
-source "variants/${TARGET}-${VARIANT}.sh"
-
-for addin in ${ADDINS[*]}; do
-    source "addins/${addin}.sh"
-done
-
-if docker info -f "{{println .SecurityOptions}}" | grep rootless >/dev/null 2>&1; then
-    UIDARGS=()
-else
-    UIDARGS=( -u "$(id -u):$(id -g)" )
+if [[ $# -lt 2 ]]; then
+    echo "usage: $0 <target> <variant> [addin ...]" >&2
+    echo "  e.g. $0 linux64 gpl" >&2
+    exit 2
 fi
 
-rm -rf ffbuild
-mkdir ffbuild
+TARGET="$1"
+VARIANT="$2"
+shift 2
+
+# util/vars.sh defines the stage-function defaults and validates the variant.
+# shellcheck source=util/vars.sh
+source util/vars.sh "$TARGET" "$VARIANT" "$@"
+
+# Stage scripts are executed in a *separate* process (bash util/run_stage.sh),
+# so the target/variant contract must be exported for them to see it.
+export TARGET VARIANT ADDINS_STR
+export LICENSE_FILE
+
+# shellcheck source=native/env.sh
+source native/env.sh
+# shellcheck source=util/deps.sh
+source util/deps.sh
+
+# --- native shim for upstream's Dockerfile emitter --------------------------
+# Addins (e.g. addins/lto.sh) emit `ENV ...` lines via to_df(). Natively we
+# apply those ENV lines directly to the environment instead of writing a
+# Dockerfile. RUN/COPY/FROM lines are ignored.
+to_df() {
+    local line
+    line="$(printf '%s' "$*")"
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in
+        ENV\ *) eval "export ${line#ENV }" ;;
+        *) : ;;
+    esac
+}
+
+# shellcheck source=/dev/null
+source "variants/${TARGET}-${VARIANT}.sh"
+for addin in ${ADDINS[*]}; do
+    # shellcheck source=/dev/null
+    source "addins/${addin}.sh"
+    type ffbuild_dockeraddin &>/dev/null && ffbuild_dockeraddin || true
+done
+
+# Refresh the generated /cross.meson + /toolchain.cmake targets so meson/cmake
+# stages see the resolved compilers (including any override).
+ffbuild_write_toolchain_files
+
+if [[ "$TARGET" != linux64 ]]; then
+    echo "build.sh: this project supports the linux64 target only (got '$TARGET')." >&2
+    exit 2
+fi
+
+if [[ -n "${FFBUILD_CLEAN:-}" ]]; then
+    echo "== cleaning $FFBUILD_ROOT =="
+    rm -rf "$FFBUILD_ROOT"
+fi
+
+mkdir -p "$FFBUILD_ROOT"/{prefix,destdir,work,log}
+FFBUILD_STAGE_ROOT="$FFBUILD_ROOT/work/stages"
+FFBUILD_STATE="$FFBUILD_ROOT/state"
+export FFBUILD_STAGE_ROOT
+mkdir -p "$FFBUILD_STATE"
+
+# Guard against concurrent builds sharing the same FFBUILD_ROOT: two runs would
+# clobber each other's stage work dirs and cause confusing spurious failures.
+# mkdir is atomic, so it gives us a reliable lock without extra dependencies.
+LOCKDIR="$FFBUILD_ROOT/.build.lock.d"
+acquire_lock() {
+    if mkdir "$LOCKDIR" 2>/dev/null; then
+        echo $$ > "$LOCKDIR/pid"
+        return 0
+    fi
+    local owner=""
+    [[ -f "$LOCKDIR/pid" ]] && owner="$(cat "$LOCKDIR/pid" 2>/dev/null)"
+    if [[ -n "$owner" ]] && kill -0 "$owner" 2>/dev/null; then
+        echo "build.sh: another build is already running (pid $owner) for $FFBUILD_ROOT" >&2
+        exit 1
+    fi
+    echo "build.sh: removing stale lock ${owner:+from pid $owner }($LOCKDIR)" >&2
+    rm -rf "$LOCKDIR"
+    mkdir "$LOCKDIR" || { echo "build.sh: could not acquire lock $LOCKDIR" >&2; exit 1; }
+    echo $$ > "$LOCKDIR/pid"
+}
+acquire_lock
+trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
 
 FFMPEG_REPO="${FFMPEG_REPO:-https://github.com/FFmpeg/FFmpeg.git}"
 FFMPEG_REPO="${FFMPEG_REPO_OVERRIDE:-$FFMPEG_REPO}"
 GIT_BRANCH="${GIT_BRANCH:-master}"
 GIT_BRANCH="${GIT_BRANCH_OVERRIDE:-$GIT_BRANCH}"
 
-BUILD_SCRIPT="$(mktemp)"
-trap "rm -f -- '$BUILD_SCRIPT'" EXIT
-
 RPATH_LDEXEFLAGS=''
 if [[ $TARGET == linux* && $VARIANT == *shared* ]]; then
-    RPATH_LDEXEFLAGS=' -Wl,-rpath,\\\$\$ORIGIN/../lib'
+    RPATH_LDEXEFLAGS=' -Wl,-rpath,\$\$ORIGIN/../lib'
 fi
 
-cat <<EOF >"$BUILD_SCRIPT"
-    set -xe
-    cd /ffbuild
-    rm -rf ffmpeg prefix
-
-    git clone --filter=blob:none --branch='$GIT_BRANCH' '$FFMPEG_REPO' ffmpeg
-    cd ffmpeg
-
-    ./configure --prefix=/ffbuild/prefix --pkg-config-flags="--static" \$FFBUILD_TARGET_FLAGS \$FF_CONFIGURE \
-        --extra-cflags="\$FF_CFLAGS" --extra-cxxflags="\$FF_CXXFLAGS" --extra-libs="\$FF_LIBS" \
-        --extra-ldflags="\$FF_LDFLAGS" --extra-ldexeflags="\$FF_LDEXEFLAGS"'$RPATH_LDEXEFLAGS' \
-        --cc="\$CC" --cxx="\$CXX" --ar="\$AR" --ranlib="\$RANLIB" --nm="\$NM" \
-        --extra-version="\$(date +%Y%m%d)" || { cat ffbuild/config.log; exit 1; }
-    make -j\$(nproc) V=1
-    make install install-doc
-EOF
-
-[[ -t 1 ]] && TTY_ARG="-t" || TTY_ARG=""
-
-docker run --rm -i $TTY_ARG "${UIDARGS[@]}" -v "$PWD/ffbuild":/ffbuild -v "$BUILD_SCRIPT":/build.sh "$IMAGE" bash /build.sh
-
-if [[ -n "$FFBUILD_OUTPUT_DIR" ]]; then
-    mkdir -p "$FFBUILD_OUTPUT_DIR"
-    package_variant ffbuild/prefix "$FFBUILD_OUTPUT_DIR"
-    [[ -n "$LICENSE_FILE" ]] && cp "ffbuild/ffmpeg/$LICENSE_FILE" "$FFBUILD_OUTPUT_DIR/LICENSE.txt"
-    rm -rf ffbuild
-    exit 0
+# =============================================================== downloads ====
+if [[ -z "${FFBUILD_SKIP_DOWNLOAD:-}" && -z "${FFBUILD_FFMPEG_ONLY:-}" ]]; then
+    echo "== refreshing download cache =="
+    ./native/download.sh --needed "$TARGET" "$VARIANT" ${ADDINS[@]+"${ADDINS[@]}"}
 fi
 
-mkdir -p artifacts
-ARTIFACTS_PATH="$PWD/artifacts"
-BUILD_NAME="ffmpeg-$(./ffbuild/ffmpeg/ffbuild/version.sh ffbuild/ffmpeg)-${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}"
+# ============================================================ dependencies ====
+# Escape hatch: comma/space separated stage names to skip (e.g. rust-dependent
+# stages when rust is unavailable). Skipped stages are also excluded from the
+# aggregated FFmpeg flags.
+FFBUILD_SKIP_STAGES="${FFBUILD_SKIP_STAGES:-}"
+ffbuild_stage_skipped() {
+    local s
+    for s in ${FFBUILD_SKIP_STAGES//,/ }; do
+        [[ "$s" == "$1" ]] && return 0
+    done
+    return 1
+}
 
-mkdir -p "ffbuild/pkgroot/$BUILD_NAME"
-package_variant ffbuild/prefix "ffbuild/pkgroot/$BUILD_NAME"
+run_one_script() {
+    local SCRIPT="$1"
+    local STAGENAME
+    STAGENAME="$(basename "$SCRIPT" .sh)"
 
-[[ -n "$LICENSE_FILE" ]] && cp "ffbuild/ffmpeg/$LICENSE_FILE" "ffbuild/pkgroot/$BUILD_NAME/LICENSE.txt"
+    # Resumability: a full linux64/gpl dependency build takes a long time, and
+    # re-running after a late failure must not redo everything. Stages that
+    # already completed are skipped unless FFBUILD_FORCE is set.
+    if [[ -z "${FFBUILD_FORCE:-}" && -f "$FFBUILD_STATE/${STAGENAME}.done" ]]; then
+        echo "   (already built: $STAGENAME)"
+        return 0
+    fi
 
-cd ffbuild/pkgroot
-if [[ "${TARGET}" == win* ]]; then
-    OUTPUT_FNAME="${BUILD_NAME}.zip"
-    docker run --rm -i $TTY_ARG "${UIDARGS[@]}" -v "${ARTIFACTS_PATH}":/out -v "${PWD}/${BUILD_NAME}":"/${BUILD_NAME}" -w / "$IMAGE" zip -9 -r "/out/${OUTPUT_FNAME}" "$BUILD_NAME"
-else
-    OUTPUT_FNAME="${BUILD_NAME}.tar.xz"
-    docker run --rm -i $TTY_ARG "${UIDARGS[@]}" -v "${ARTIFACTS_PATH}":/out -v "${PWD}/${BUILD_NAME}":"/${BUILD_NAME}" -w / "$IMAGE" tar -I "xz -T0" -cf "/out/${OUTPUT_FNAME}" "$BUILD_NAME"
+    local CACHE="$FFBUILD_REPO_ROOT/.cache/downloads/${STAGENAME}.tar.xz"
+    [[ -f "$CACHE" ]] || CACHE=""
+
+    # Upstream bind-mounts patches/<name> at /patches for a few stages
+    # (see their ffbuild_dockerstage). Probe that declaration and repopulate the
+    # repo-local dir that /patches symlinks to (native/setup.sh creates it).
+    local PATCHSRC
+    PATCHSRC="$(stage_patch_src "$SCRIPT")"
+    rm -rf "$FFBUILD_REPO_ROOT/patches-current"
+    mkdir -p "$FFBUILD_REPO_ROOT/patches-current"
+    if [[ -n "$PATCHSRC" && -d "$PATCHSRC" ]]; then
+        cp -a "$PATCHSRC"/. "$FFBUILD_REPO_ROOT/patches-current"/
+        echo "   patches: $PATCHSRC"
+    fi
+
+    rm -rf "$FFBUILD_DESTDIR"
+    mkdir -p "$FFBUILD_DESTDIR" "$FFBUILD_PREFIX"
+
+    SELF="$SCRIPT" STAGENAME="$STAGENAME" STAGE_CACHE="$CACHE" \
+        bash util/run_stage.sh "$SCRIPT"
+
+    touch "$FFBUILD_STATE/${STAGENAME}.done"
+}
+
+# Derive the src dir of a stage's `--mount=src=<x>,dst=/patches` declaration.
+stage_patch_src() {
+    local SCRIPT="$1" out
+    out="$(
+        to_df() { printf '%s\n' "$*"; }   # capture raw lines instead of applying
+        SELF="$SCRIPT"
+        STAGENAME="$(basename "$SCRIPT" .sh)"
+        # shellcheck disable=SC1090
+        source util/dl_functions.sh 2>/dev/null || true
+        # shellcheck disable=SC1090
+        source "$SCRIPT" 2>/dev/null || true
+        if type ffbuild_dockerstage >/dev/null 2>&1; then
+            ffbuild_dockerstage 2>/dev/null || true
+        fi
+    )" 2>/dev/null || true
+    sed -n 's/.*--mount=src=\([^,]*\),dst=\/patches.*/\1/p' <<<"$out" | head -n1
+}
+
+build_deps() {
+    local ENTRY ORDER STAGE SCRIPT
+    ENTRY="$(ffbuild_entry_script)"
+
+    echo "== resolving dependency graph =="
+    ORDER="$(get_build_order "$ENTRY")"
+    echo "   $(wc -l <<<"$ORDER") stages in dependency order"
+
+    for STAGE in $ORDER; do
+        if ffbuild_stage_skipped "$STAGE"; then
+            echo "-- skip (FFBUILD_SKIP_STAGES): $STAGE"
+            continue
+        fi
+        if ! ffbuild_stage_enabled "$STAGE"; then
+            echo "-- skip (disabled for $TARGET): $STAGE"
+            continue
+        fi
+        while IFS= read -r SCRIPT; do
+            [[ -n "$SCRIPT" ]] || continue
+            echo "-- build: $SCRIPT"
+            run_one_script "$SCRIPT" 2>&1 | tee "$FFBUILD_LOG/$(basename "$SCRIPT" .sh).log"
+        done < <(ffbuild_stage_scripts "$STAGE")
+    done
+}
+
+if [[ -z "${FFBUILD_FFMPEG_ONLY:-}" ]]; then
+    build_deps
+    echo "== dependencies done =="
+    if [[ -n "${FFBUILD_DEPS_ONLY:-}" ]]; then
+        echo "FFBUILD_DEPS_ONLY set; stopping before FFmpeg. Prefix: $FFBUILD_PREFIX"
+        exit 0
+    fi
 fi
-cd -
 
-rm -rf ffbuild
+# ======================================================== aggregate flags ====
+echo "== aggregating stage flags =="
+ENTRY="$(ffbuild_entry_script)"
+for SUBDEP in $(get_stagedeps_recursive "$ENTRY"); do
+    ffbuild_stage_skipped "$SUBDEP" && continue
+    STAGE="$(resolvestage "$SUBDEP")"
+    if [[ -d "$STAGE" ]]; then
+        SCRIPTS=("$STAGE"/??-*.sh)
+    else
+        SCRIPTS=("$STAGE")
+    fi
+    for SCRIPT in "${SCRIPTS[@]}"; do
+        [[ -f "$SCRIPT" ]] || continue
+        FF_CONFIGURE+=" $(get_output "$SCRIPT" configure)"
+        FF_CFLAGS+=" $(get_output "$SCRIPT" cflags)"
+        FF_CXXFLAGS+=" $(get_output "$SCRIPT" cxxflags)"
+        FF_LDFLAGS+=" $(get_output "$SCRIPT" ldflags)"
+        FF_LDEXEFLAGS+=" $(get_output "$SCRIPT" ldexeflags)"
+        FF_LIBS+=" $(get_output "$SCRIPT" libs)"
+    done
+done
 
-if [[ -n "$GITHUB_ACTIONS" ]]; then
-    echo "build_name=${BUILD_NAME}" >> "$GITHUB_OUTPUT"
-    echo "${OUTPUT_FNAME}" > "${ARTIFACTS_PATH}/${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}.txt"
-fi
+FF_CONFIGURE="$(xargs <<< "${FF_CONFIGURE:-}")"
+FF_CFLAGS="$(xargs <<< "${FF_CFLAGS:-}")"
+FF_CXXFLAGS="$(xargs <<< "${FF_CXXFLAGS:-}")"
+FF_LDFLAGS="$(xargs <<< "${FF_LDFLAGS:-}")"
+FF_LDEXEFLAGS="$(xargs <<< "${FF_LDEXEFLAGS:-}")"
+FF_LIBS="$(xargs <<< "${FF_LIBS:-}")"
+
+# Debian's gcc enables -Wl,--as-needed by default, and FFmpeg's configure emits
+# our LDFLAGS (which carry -lm) *before* the objects in its link probes, so that
+# early -lm is discarded. Static libraries whose .pc omits libm then fail the
+# probe, e.g. chromaprint:
+#   undefined reference to symbol 'round@@GLIBC_2.2.5'
+#   /lib/x86_64-linux-gnu/libm.so.6: error adding symbols: DSO missing from command line
+# --extra-libs is appended *after* the libraries (configure: `... $libs $extralibs`),
+# so mirror the mandatory libm there. See also FFBUILD_EXTRA_LDFLAGS.
+FF_LIBS="$(xargs <<< "${FF_LIBS:-} -lm")"
+
+# ==================================================== prune dependency junk ==
+# Dependency stages install their own CLI tools and man pages into the prefix.
+# Strip them here (as well as per-stage, see util/run_stage.sh) so that the
+# artifact carries FFmpeg's own outputs only. This also repairs a prefix built
+# by an earlier run whose stages are now skipped via ffbuild/state.
+rm -rf "$FFBUILD_PREFIX/bin" "$FFBUILD_PREFIX/share/man"
+
+# ============================================================ build ffmpeg ==
+FFMPEG_DIR="$FFBUILD_ROOT/ffmpeg"
+rm -rf "$FFMPEG_DIR"
+git clone --filter=blob:none --branch="$GIT_BRANCH" "$FFMPEG_REPO" "$FFMPEG_DIR"
+cd "$FFMPEG_DIR"
+
+echo "== configuring ffmpeg =="
+./configure --prefix="$FFBUILD_PREFIX" --pkg-config-flags="--static" \
+    $FFBUILD_TARGET_FLAGS $FF_CONFIGURE \
+    --extra-cflags="$FF_CFLAGS" --extra-cxxflags="$FF_CXXFLAGS" --extra-libs="$FF_LIBS" \
+    --extra-ldflags="$FF_LDFLAGS" --extra-ldexeflags="$FF_LDEXEFLAGS$RPATH_LDEXEFLAGS" \
+    --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --nm="$NM" \
+    --extra-version="$(date +%Y%m%d)" || { cat ffbuild/config.log; exit 1; }
+
+echo "== building ffmpeg =="
+make -j"$FFBUILD_JOBS" V=1
+make install
+# Docs are best-effort: texi2html may be unavailable on some distros.
+make install-doc || echo "WARNING: 'make install-doc' failed; documentation may be incomplete" >&2
+cd "$FFBUILD_REPO_ROOT"
+
+# =============================================================== packaging ===
+ARTIFACTS_PATH="$FFBUILD_REPO_ROOT/artifacts"
+mkdir -p "$ARTIFACTS_PATH"
+
+BUILD_NAME="ffmpeg-$("$FFMPEG_DIR/ffbuild/version.sh" "$FFMPEG_DIR")-${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}"
+PKGROOT="$FFBUILD_ROOT/pkgroot/$BUILD_NAME"
+rm -rf "$FFBUILD_ROOT/pkgroot"
+mkdir -p "$PKGROOT"
+
+package_variant "$FFBUILD_PREFIX" "$PKGROOT"
+[[ -n "${LICENSE_FILE:-}" && -f "$FFMPEG_DIR/$LICENSE_FILE" ]] && \
+    cp "$FFMPEG_DIR/$LICENSE_FILE" "$PKGROOT/LICENSE.txt"
+
+cd "$FFBUILD_ROOT/pkgroot"
+OUTPUT_FNAME="${BUILD_NAME}.tar.xz"
+tar -I "xz -T0" -cf "$ARTIFACTS_PATH/${OUTPUT_FNAME}" "$BUILD_NAME"
+cd "$FFBUILD_REPO_ROOT"
+
+echo
+echo "== done =="
+echo "artifact: $ARTIFACTS_PATH/${OUTPUT_FNAME}"

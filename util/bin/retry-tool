@@ -1,0 +1,31 @@
+#!/bin/bash
+set -xe -o pipefail
+#
+# retry-tool — run a command with retry + escalating timeout.
+#
+# Upstream (BtbN/FFmpeg-Builds) hard-codes MAX_RETRY=10 / CUR_TIMEOUT=120s, which
+# assumes a fast, low-latency network (GitHub runners). Behind a proxy or on a
+# slow link a single large repo can legitimately take much longer than 120s.
+# The defaults below are unchanged; both are now overridable via environment:
+#
+#   RETRY_MAX           maximum number of attempts           (default 10)
+#   RETRY_TIMEOUT       initial per-attempt timeout, seconds  (default 120)
+#   RETRY_TIMEOUT_INC   timeout growth per retry, seconds     (default 60)
+#   RETRY_SLEEP_MAX     max backoff sleep between retries     (default 90)
+
+RETRY_COUNTER=0
+MAX_RETRY="${RETRY_MAX:-10}"
+CUR_TIMEOUT="${RETRY_TIMEOUT:-120}"
+CUR_TIMEOUT_INC="${RETRY_TIMEOUT_INC:-60}"
+SLEEP_MAX="${RETRY_SLEEP_MAX:-90}"
+
+while [[ $RETRY_COUNTER -lt $MAX_RETRY ]]; do
+    (timeout "$CUR_TIMEOUT" "$@") && break || sleep "$(shuf -i 5-"$SLEEP_MAX" -n 1)"
+    RETRY_COUNTER=$(( RETRY_COUNTER + 1 ))
+    CUR_TIMEOUT=$(( CUR_TIMEOUT + CUR_TIMEOUT_INC ))
+    echo "Retry $RETRY_COUNTER (timeout now ${CUR_TIMEOUT}s)..."
+done
+if [[ $RETRY_COUNTER -ge $MAX_RETRY ]]; then
+    echo "Max retry count exceeded."
+    exit 1
+fi
