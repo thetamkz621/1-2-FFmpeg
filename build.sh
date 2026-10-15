@@ -118,7 +118,28 @@ GIT_BRANCH="${GIT_BRANCH_OVERRIDE:-$GIT_BRANCH}"
 
 RPATH_LDEXEFLAGS=''
 if [[ $TARGET == linux* && $VARIANT == *shared* ]]; then
-    RPATH_LDEXEFLAGS=' -Wl,-rpath,\$\$ORIGIN/../lib'
+    # Escaping is load-bearing; this is upstream's exact literal for a reason.
+    # The value travels through three expansions before the linker sees it:
+    #
+    #   1. ./configure itself expands the option value once (shell semantics):
+    #          \\  ->  \        \$  ->  $        \$  ->  $
+    #      so  \ \ \ $ \ $ O R I G I N   becomes   \ $ $ O R I G I N
+    #      and is written to ffbuild/config.mak as  -Wl,-rpath,\$$ORIGIN/../lib
+    #   2. make rewrites `$$` -> `$`, leaving the backslash:  \$ORIGIN
+    #   3. the shell running the link turns `\$` into a literal `$`
+    #
+    # Net result: the linker records `$ORIGIN/../lib`. Drop a backslash and step
+    # 1 yields a bare `$ORIGIN`, which step 3 expands as an unset shell variable —
+    # the binary then silently records `RUNPATH: [/../lib]` or `[../lib]`, and
+    # only works if the process happens to be started from bin/.
+    # `--disable-new-dtags` keeps DT_RPATH instead of DT_RUNPATH.
+    # The shared libav* libraries carry no rpath of their own (verified: same as
+    # upstream), so e.g. libavcodec's NEEDED libswresample/libavutil can only be
+    # resolved through the *executable's* rpath — and only DT_RPATH is consulted
+    # for transitive lookups; DT_RUNPATH is not. Upstream records DT_RPATH
+    # (crosstool-ng's ld defaults to old dtags), while Debian's ld defaults to
+    # new dtags, so we ask for old dtags explicitly to match.
+    RPATH_LDEXEFLAGS=' -Wl,--disable-new-dtags -Wl,-rpath,\\\$\$ORIGIN/../lib'
 fi
 
 # =============================================================== downloads ====
