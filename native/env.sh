@@ -225,18 +225,34 @@ if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
     _ffbuild_base_ldflags="-static-libgcc -static-libstdc++ $_ffbuild_base_ldflags"
 fi
 
-# C language standard. This is deliberately pinned and appended last so it wins
-# over a standard that a project's own configure may have detected.
+# C language standard. When set it is appended last, so it wins over a standard
+# that a project's own configure may have detected.
 #
-# Rationale: GCC 14 accepts -std=gnu23 but still reports __STDC_VERSION__ ==
-# 202000L (the C23 final value is 202311L) *while already treating `bool` as a
-# keyword*. Projects that branch on `__STDC_VERSION__ >= 202311L` therefore take
-# the "pre-C23" path and then fail on the now-reserved `bool` — xvid 1.3.7 is a
-# concrete example (its configure injects `-std=gnu23` into CC). GCC 15+ makes
-# the two consistent (202311L); upstream's toolchain is crosstool-ng GCC 16.
-# Pinning a truthful standard restores the semantics those checks assume.
-# Override with FFBUILD_CSTD=gnu23/... or set it empty to use the default.
-FFBUILD_CSTD="${FFBUILD_CSTD-gnu17}"
+# The default exists for one specific compiler defect: GCC 14 accepts
+# -std=gnu23 but still reports __STDC_VERSION__ == 202000L (C23's final value is
+# 202311L) *while already treating `bool` as a keyword*. Projects that branch on
+# `__STDC_VERSION__ >= 202311L` then take the "pre-C23" path and fail on the
+# now-reserved `bool` — xvid is a concrete case (its configure injects
+# `-std=gnu23` into CC). GCC 15+ makes the two consistent, and clang never has
+# the problem (its -std=gnu23 reports 202311L).
+#
+# So the default is applied only when the compiler is actually in that
+# inconsistent state. That is probed rather than version-sniffed. Forcing the
+# standard on a self-consistent compiler buys nothing — clang's default *is*
+# gnu17 — and actively hurts: `-std=gnu17` is rejected outright for C++
+# translation units, so any project that feeds CFLAGS to a C++ compile breaks
+# (davs2 compiles its .cc sources with $(CC); gcc only warns about this, clang
+# errors).
+#
+# Override with FFBUILD_CSTD=gnu23/... or set it empty for the compiler default.
+if [[ -z "${FFBUILD_CSTD+set}" ]]; then
+    if [[ "$("$CC" -std=gnu23 -dM -E - </dev/null 2>/dev/null |
+             awk '/^#define __STDC_VERSION__/ { print $3; exit }')" == "202000L" ]]; then
+        FFBUILD_CSTD="gnu17"
+    else
+        FFBUILD_CSTD=""
+    fi
+fi
 if [[ -n "$FFBUILD_CSTD" ]]; then
     _ffbuild_base_cflags="$_ffbuild_base_cflags -std=$FFBUILD_CSTD"
 fi
