@@ -98,9 +98,16 @@ if [[ -d "${FFBUILD_DESTDIR:-}" ]]; then
     # time, in build.sh (see "prune dependency junk") — after every dependency
     # has been built and before FFmpeg is installed, so FFmpeg's own bin/ and
     # man1/ are unaffected.
+    #
+    # --remove-destination is load-bearing: this merge runs again whenever a
+    # completed stage is rebuilt (e.g. after deleting its ffbuild/state marker),
+    # and plain `cp -l` refuses to replace a destination that already exists —
+    # it goes straight to link() and fails with EEXIST, which leaves the *old*
+    # files in place while the command exits non-zero. cp -a is the fallback for
+    # a cross-device destination, where hard links are impossible.
     if [[ -d "$FFBUILD_DESTPREFIX" ]]; then
-        cp -al "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/ 2>/dev/null || \
-            cp -a "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/
+        cp -al --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/ ||
+            cp -a --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/
     fi
 fi
 
