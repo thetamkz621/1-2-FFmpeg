@@ -279,15 +279,12 @@ FF_LDFLAGS="$(xargs <<< "${FF_LDFLAGS:-}")"
 FF_LDEXEFLAGS="$(xargs <<< "${FF_LDEXEFLAGS:-}")"
 FF_LIBS="$(xargs <<< "${FF_LIBS:-}")"
 
-# Debian's gcc enables -Wl,--as-needed by default, and FFmpeg's configure emits
-# our LDFLAGS (which carry -lm) *before* the objects in its link probes, so that
-# early -lm is discarded. Static libraries whose .pc omits libm then fail the
-# probe, e.g. chromaprint:
-#   undefined reference to symbol 'round@@GLIBC_2.2.5'
-#   /lib/x86_64-linux-gnu/libm.so.6: error adding symbols: DSO missing from command line
-# --extra-libs is appended *after* the libraries (configure: `... $libs $extralibs`),
-# so mirror the mandatory libm there. See also FFBUILD_EXTRA_LDFLAGS.
-FF_LIBS="$(xargs <<< "${FF_LIBS:-} -lm")"
+# Runtime libraries that must come *after* the libraries, e.g. libm (chromaprint)
+# and libstdc++ (davs2). See FFBUILD_EXTRA_LIBS in native/env.sh for why this
+# position is load-bearing: --extra-libs is placed after the library list
+# (configure: `... $libs $extralibs`), whereas the same flag in LDFLAGS lands
+# before it and is dropped by Debian's default -Wl,--as-needed.
+FF_LIBS="$(xargs <<< "${FF_LIBS:-} ${FFBUILD_EXTRA_LIBS:-}")"
 
 # ==================================================== prune dependency junk ==
 # The single place where third-party build outputs are kept out of the artifact.

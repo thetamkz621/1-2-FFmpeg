@@ -276,6 +276,21 @@ export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-x86_64-unknown-linux-gnu}"
 # FFmpeg's --extra-version suffix. Unset or empty keeps upstream's default
 # behaviour, i.e. the build date in YYYYMMDD form.
 export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
+# Libraries appended *after* every library on FFmpeg's link line (--extra-libs).
+# This position matters: a library that only satisfies references coming from the
+# dependency archives has to appear after them, otherwise Debian's default
+# `-Wl,--as-needed` discards it. Both entries exist for a concrete failure:
+#   -lm      chromaprint/fftw3 do not propagate their libm dependency, so the
+#            probe failed with "undefined reference to symbol 'round@@GLIBC_2.2.5'"
+#            / "DSO missing from command line".
+#   -lstdc++ some dependency archives are C++ while their .pc files declare no
+#            C++ runtime (davs2). clang keeps a __clang_call_terminate thunk in
+#            its objects which references __cxa_begin_catch/std::terminate;
+#            gcc's objects happen not to reference them, which is why this only
+#            shows up in a clang build ("davs2 >= 1.6.0 not found using
+#            pkg-config"). Override with e.g. -lc++ for a libc++ toolchain, or
+#            set it empty to add nothing.
+export FFBUILD_EXTRA_LIBS="${FFBUILD_EXTRA_LIBS--lm -lstdc++}"
 export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-/toolchain.cmake}"
 export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-/cross.meson}"
 
@@ -487,6 +502,7 @@ proxy (https) = ${https_proxy:-<none>}
 proxy (all)   = ${all_proxy:-<none>}
 no_proxy      = ${no_proxy:-<none>}
 extra version = $FFBUILD_EXTRA_VERSION
+extra libs    = ${FFBUILD_EXTRA_LIBS:-<none>}
 ==============================================================================
 EOF
 }
