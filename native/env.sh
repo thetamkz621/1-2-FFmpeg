@@ -36,9 +36,11 @@
 # Layout / misc
 #   FFBUILD_ROOT           build root, default <repo>/.ffbuild
 #   FFBUILD_JOBS           parallel job count, default $(nproc)
-#   FFBUILD_PROXY          http proxy, default http://192.168.101.1:7700
-#                          (empty string disables proxy injection)
-#   FFBUILD_NO_PROXY       no_proxy list
+#   FFBUILD_PROXY          proxy override. Unset: inherit http_proxy /
+#                          https_proxy / all_proxy (and their uppercase forms)
+#                          from the environment. Set: use this value for all
+#                          schemes. Empty: no proxy at all.
+#   FFBUILD_NO_PROXY       no_proxy override; empty (default) adds nothing
 # ------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
@@ -277,16 +279,44 @@ export FFBUILD_JOBS="${FFBUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 # and build.sh uses -j$FFBUILD_JOBS for FFmpeg itself.
 
 # ---------------------------------------------------------------- proxy -------
-FFBUILD_PROXY="${FFBUILD_PROXY-http://192.168.101.1:7700}"
-FFBUILD_NO_PROXY="${FFBUILD_NO_PROXY-127.0.0.1,localhost,::1,mirror.nju.edu.cn,deb.debian.org,security.debian.org,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12}"
-if [[ -n "$FFBUILD_PROXY" ]]; then
-    export http_proxy="$FFBUILD_PROXY"   https_proxy="$FFBUILD_PROXY"   all_proxy="$FFBUILD_PROXY"
-    export HTTP_PROXY="$FFBUILD_PROXY"   HTTPS_PROXY="$FFBUILD_PROXY"   ALL_PROXY="$FFBUILD_PROXY"
-    export no_proxy="$FFBUILD_NO_PROXY"  NO_PROXY="$FFBUILD_NO_PROXY"
+# Effective proxy, resolved in this order:
+#   1. FFBUILD_PROXY, when the caller sets it explicitly (an explicitly *empty*
+#      value means "no proxy at all");
+#   2. otherwise the ambient environment, per scheme:
+#      http_proxy / HTTP_PROXY, then https_proxy / HTTPS_PROXY, then
+#      all_proxy / ALL_PROXY — all_proxy also fills schemes left unset;
+#   3. otherwise there is no proxy.
+# No proxy address is hard-coded here.
+if [[ -v FFBUILD_PROXY ]]; then
+    _ffbuild_http_proxy="$FFBUILD_PROXY"
+    _ffbuild_https_proxy="$FFBUILD_PROXY"
+    _ffbuild_all_proxy="$FFBUILD_PROXY"
 else
-    unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY
+    _ffbuild_http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
+    _ffbuild_https_proxy="${https_proxy:-${HTTPS_PROXY:-}}"
+    _ffbuild_all_proxy="${all_proxy:-${ALL_PROXY:-}}"
+    [[ -n "$_ffbuild_http_proxy" ]] || _ffbuild_http_proxy="$_ffbuild_all_proxy"
+    [[ -n "$_ffbuild_https_proxy" ]] || _ffbuild_https_proxy="$_ffbuild_all_proxy"
 fi
-export FFBUILD_PROXY FFBUILD_NO_PROXY
+
+if [[ -n "$_ffbuild_http_proxy$_ffbuild_https_proxy$_ffbuild_all_proxy" ]]; then
+    export http_proxy="$_ffbuild_http_proxy"  https_proxy="$_ffbuild_https_proxy"  all_proxy="$_ffbuild_all_proxy"
+    export HTTP_PROXY="$_ffbuild_http_proxy"  HTTPS_PROXY="$_ffbuild_https_proxy"  ALL_PROXY="$_ffbuild_all_proxy"
+else
+    unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
+fi
+# Single, resolved value — exported mainly for reporting (ffbuild_env_dump).
+export FFBUILD_PROXY="${_ffbuild_https_proxy:-${_ffbuild_http_proxy:-$_ffbuild_all_proxy}}"
+unset _ffbuild_http_proxy _ffbuild_https_proxy _ffbuild_all_proxy
+
+# FFBUILD_NO_PROXY contributes nothing by default — in particular no
+# machine-specific host names. Set it to override no_proxy/NO_PROXY; leaving it
+# empty keeps whatever the ambient environment already specified.
+FFBUILD_NO_PROXY="${FFBUILD_NO_PROXY:-}"
+if [[ -n "$FFBUILD_NO_PROXY" ]]; then
+    export no_proxy="$FFBUILD_NO_PROXY" NO_PROXY="$FFBUILD_NO_PROXY"
+fi
+export FFBUILD_NO_PROXY
 
 # ------------------------------------------------------- autotools side PREFIX -
 # Exposes versioned names like aclocal-1.18 (needed by gnulib-based projects)
@@ -436,7 +466,10 @@ FFBUILD_RUST_TARGET    = $FFBUILD_RUST_TARGET
 FFBUILD_CMAKE_TOOLCHAIN= $FFBUILD_CMAKE_TOOLCHAIN
 PKG_CONFIG_LIBDIR      = $PKG_CONFIG_LIBDIR
 -- network --------------------------------------------------------------------
-proxy = ${FFBUILD_PROXY:-<disabled>}
+proxy (http)  = ${http_proxy:-<none>}
+proxy (https) = ${https_proxy:-<none>}
+proxy (all)   = ${all_proxy:-<none>}
+no_proxy      = ${no_proxy:-<none>}
 extra version = $FFBUILD_EXTRA_VERSION
 ==============================================================================
 EOF

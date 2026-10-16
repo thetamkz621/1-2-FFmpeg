@@ -77,12 +77,14 @@ CC=clang CXX=clang++ ./build.sh linux64 gpl          # 替换编译器
 
 ### 设置代理
 
+默认继承 shell 的代理设置（`http_proxy` / `https_proxy` / `all_proxy`）。
+
 ```bash
-FFBUILD_PROXY=http://host:port ./native/download.sh
+FFBUILD_PROXY=http://host:port ./native/download.sh   # 覆盖所有协议
+FFBUILD_PROXY= ./native/download.sh                   # 忽略 shell 中的代理
 ```
 
 > [!IMPORTANT]
-> - `FFBUILD_PROXY` 默认指向一个内网地址：请显式覆盖，或置空以禁用代理。
 > - `FFBUILD_ROOT` 路径不能包含 `.`（上游 libxcb/libglvnd 的路径处理会出错）。
 > - 产物对齐宿主 glibc；~~需要 glibc 2.28 基线时使用 `FFBUILD_TOOLCHAIN_MODE=ctng`。~~
 > - 构建不需要 root，删除仓库即可清理全部构建产物。

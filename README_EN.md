@@ -79,12 +79,14 @@ CC=clang CXX=clang++ ./build.sh linux64 gpl          # replace the compiler
 
 ### Set proxy
 
+Proxy settings are inherited from the shell (`http_proxy` / `https_proxy` / `all_proxy`).
+
 ```bash
-FFBUILD_PROXY=http://host:port ./native/download.sh
+FFBUILD_PROXY=http://host:port ./native/download.sh   # override all protocols
+FFBUILD_PROXY= ./native/download.sh                   # ignore the shell's proxy
 ```
 
 > [!IMPORTANT]
-> - `FFBUILD_PROXY` defaults to a private LAN address: override it, or empty it to disable.
 > - `FFBUILD_ROOT` must not contain a dot (upstream's libxcb/libglvnd path handling breaks on it).
 > - Artifacts match the host glibc; ~~use `FFBUILD_TOOLCHAIN_MODE=ctng` for a glibc 2.28 baseline.~~
 > - Building needs no root; deleting the repository removes every build artifact.
