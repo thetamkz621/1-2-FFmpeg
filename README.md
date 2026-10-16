@@ -89,6 +89,8 @@ FFBUILD_PROXY= ./native/download.sh                   # 忽略 shell 中的代�
 > - 产物对齐宿主 glibc；~~需要 glibc 2.28 基线时使用 `FFBUILD_TOOLCHAIN_MODE=ctng`。~~
 > - 构建不需要 root，删除仓库即可清理全部构建产物。
 
+> `svn` 不读取这些变量（只认 `~/.subversion/servers`），因此 lame 与 xvid 两个阶段始终直连。
+
 ## 目录
 
 ```

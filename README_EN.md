@@ -91,6 +91,9 @@ FFBUILD_PROXY= ./native/download.sh                   # ignore the shell's proxy
 > - Artifacts match the host glibc; ~~use `FFBUILD_TOOLCHAIN_MODE=ctng` for a glibc 2.28 baseline.~~
 > - Building needs no root; deleting the repository removes every build artifact.
 
+> `svn` ignores these variables (it only reads `~/.subversion/servers`), so the lame and xvid
+> stages always connect directly.
+
 ## Project layout
 
 ```
