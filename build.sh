@@ -290,10 +290,15 @@ FF_LIBS="$(xargs <<< "${FF_LIBS:-}")"
 FF_LIBS="$(xargs <<< "${FF_LIBS:-} -lm")"
 
 # ==================================================== prune dependency junk ==
-# Dependency stages install their own CLI tools and man pages into the prefix.
-# Strip them here (as well as per-stage, see util/run_stage.sh) so that the
-# artifact carries FFmpeg's own outputs only. This also repairs a prefix built
-# by an earlier run whose stages are now skipped via ffbuild/state.
+# The single place where third-party build outputs are kept out of the artifact.
+# Dependency stages install their own CLI tools and man pages into the shared
+# prefix, and package_variant copies $FFBUILD_PREFIX/{bin,share/man} wholesale.
+#
+# This must run *after* the dependency phase and *before* FFmpeg is installed:
+# the tools have to stay available while dependencies build (glib's
+# `glib-mkenums` is needed by pango), and FFmpeg's own bin/ + man1/ are
+# installed later and are therefore untouched. It also repairs a prefix built by
+# an earlier run whose stages are now skipped via ffbuild/state.
 rm -rf "$FFBUILD_PREFIX/bin" "$FFBUILD_PREFIX/share/man"
 
 # ============================================================ build ffmpeg ==
