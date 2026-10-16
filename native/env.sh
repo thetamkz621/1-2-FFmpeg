@@ -255,6 +255,9 @@ FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --arch=x86_64 --target-os=linux"
     FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --cross-prefix=$FFBUILD_CROSS_PREFIX --arch=x86_64 --target-os=linux"
 export FFBUILD_TARGET_FLAGS
 export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-x86_64-unknown-linux-gnu}"
+# FFmpeg's --extra-version suffix. Unset or empty keeps upstream's default
+# behaviour, i.e. the build date in YYYYMMDD form.
+export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
 export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-/toolchain.cmake}"
 export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-/cross.meson}"
 
@@ -434,6 +437,7 @@ FFBUILD_CMAKE_TOOLCHAIN= $FFBUILD_CMAKE_TOOLCHAIN
 PKG_CONFIG_LIBDIR      = $PKG_CONFIG_LIBDIR
 -- network --------------------------------------------------------------------
 proxy = ${FFBUILD_PROXY:-<disabled>}
+extra version = $FFBUILD_EXTRA_VERSION
 ==============================================================================
 EOF
 }

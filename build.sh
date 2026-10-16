@@ -308,7 +308,7 @@ echo "== configuring ffmpeg =="
     --extra-cflags="$FF_CFLAGS" --extra-cxxflags="$FF_CXXFLAGS" --extra-libs="$FF_LIBS" \
     --extra-ldflags="$FF_LDFLAGS" --extra-ldexeflags="$FF_LDEXEFLAGS$RPATH_LDEXEFLAGS" \
     --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --nm="$NM" \
-    --extra-version="$(date +%Y%m%d)" || { cat ffbuild/config.log; exit 1; }
+    --extra-version="$FFBUILD_EXTRA_VERSION" || { cat ffbuild/config.log; exit 1; }
 
 echo "== building ffmpeg =="
 make -j"$FFBUILD_JOBS" V=1
