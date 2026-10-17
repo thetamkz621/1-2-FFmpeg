@@ -316,21 +316,26 @@ export FFBUILD_JOBS="${FFBUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 # and build.sh uses -j$FFBUILD_JOBS for FFmpeg itself.
 
 # --------------------------------------------------------- build-time git -----
-# Two dependency stages (50-aom, 50-libaribb24) apply their patches with
-# `git am`, which *creates commits* in the throwaway source tree. Upstream ran
-# those inside a container whose git config was known: an identity was set in
-# images/base/Dockerfile and nothing was signed. On a real host both are the
-# user's business, and either can break the stage:
+# Dependency stages write git objects in their throwaway source trees:
+# 50-aom and 50-libaribb24 apply patches with `git am` (creates commits), and
+# 50-avisynth creates a version tag with `git tag -a`. Upstream ran those inside
+# a container whose git config was known: an identity was set in
+# images/base/Dockerfile and nothing was signed. On a real host all of it is the
+# user's business, and any of it can break the stage:
 #   * commit.gpgsign=true with a passphrase-protected key and no agent ->
 #     "fatal: failed to write commit object";
+#   * tag.gpgsign=true -> `git tag -a` invokes the signer; without a terminal it
+#     fails loudly (and still writes an unsigned tag), with one it blocks on the
+#     passphrase prompt;
 #   * no user.email at all -> "unable to auto-detect email address".
-# Pin both for this process tree only. GIT_CONFIG_* outranks every config file
-# (git >= 2.31), so the host config is neither read nor written; the author of
-# those throwaway commits matches what the container produced.
-export GIT_CONFIG_COUNT=3
+# Pin all three for this process tree only. GIT_CONFIG_* outranks every config
+# file (git >= 2.31), so the host config is neither read nor written; the author
+# of those throwaway objects matches what the container produced.
+export GIT_CONFIG_COUNT=4
 export GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
 export GIT_CONFIG_KEY_1=user.name      GIT_CONFIG_VALUE_1=Builder
 export GIT_CONFIG_KEY_2=user.email     GIT_CONFIG_VALUE_2=builder@localhost
+export GIT_CONFIG_KEY_3=tag.gpgsign    GIT_CONFIG_VALUE_3=false
 
 # ---------------------------------------------------------------- proxy -------
 # Effective proxy, resolved in this order:
