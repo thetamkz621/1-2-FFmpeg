@@ -57,6 +57,16 @@ fi
 
 asroot() { "${SUDO[@]}" "$@"; }
 
+# Version probe that is safe under `set -e`: a tool this script is about to
+# install is by definition absent on a fresh host, and a bare
+# `$(missing --version)` would abort setup with status 127 before the code
+# that installs it ever runs.
+probe_version() {
+    local out=""
+    out="$("$@" 2>/dev/null | head -n1)" || out=""
+    printf '%s\n' "$out"
+}
+
 # --------------------------------------------------------------- packages -----
 # Package names target Debian 13 (trixie); unavailable entries are filtered out.
 APT_CORE=(
@@ -187,7 +197,7 @@ fi
 # A few projects (lame, libjxl, ...) require autoconf >= 2.73, which is newer
 # than Debian 13 ships (2.72). Upstream's image installs Ubuntu's autoconf 2.73
 # .deb for exactly this reason; autoconf is architecture independent.
-ac_cur="$(autoconf --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+ac_cur="$(probe_version autoconf --version | awk '{print $NF}')"
 if [[ -z "$ac_cur" ]] || [[ "$(printf '%s\n2.73\n' "$ac_cur" | sort -V | head -n1)" != "2.73" ]]; then
     echo "== installing autoconf >= 2.73 (found: ${ac_cur:-none}) =="
     ac_tmp="$(mktemp -d)"
@@ -213,7 +223,7 @@ fi
 # resolve, while plain `automake` still resolves to the distro's 1.17 so other
 # stages keep their known-good behaviour.
 AM_PREFIX="${FFBUILD_AUTOMAKE_PREFIX:-/opt/automake-1.18}"
-am_cur="$(automake --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+am_cur="$(probe_version automake --version | awk '{print $NF}')"
 if [[ -z "$am_cur" ]] || [[ "$(printf '%s\n1.18\n' "$am_cur" | sort -V | head -n1)" != "1.18" ]]; then
     if command -v automake-1.18 >/dev/null 2>&1; then
         echo "note: automake-1.18 already available"
@@ -247,7 +257,7 @@ fi
 # Debian 13 ships 1.7.0). Upstream's image installs meson via pip for the same
 # reason — do the same when the available one is too old.
 MESON_MIN="${FFBUILD_MESON_MIN:-1.11.0}"
-meson_cur="$(meson --version 2>/dev/null | head -n1)"
+meson_cur="$(probe_version meson --version)"
 if [[ -z "$meson_cur" ]] || [[ "$(printf '%s\n%s\n' "$meson_cur" "$MESON_MIN" | sort -V | head -n1)" != "$MESON_MIN" ]]; then
     echo "== installing meson >= $MESON_MIN (found: ${meson_cur:-none}) =="
     if asroot python3 -m pip install --break-system-packages --upgrade meson; then
