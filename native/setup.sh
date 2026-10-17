@@ -68,7 +68,8 @@ probe_version() {
 }
 
 # --------------------------------------------------------------- packages -----
-# Package names target Debian 13 (trixie); unavailable entries are filtered out.
+# Package names target Debian 13 (trixie) and Ubuntu 24.04 (noble); entries that
+# the running distro does not have are filtered out, so one list serves both.
 APT_CORE=(
     build-essential gcc g++ binutils make patch
     pkg-config pkgconf
@@ -194,26 +195,36 @@ else
 fi
 
 # --------------------------------------------------------------- autoconf -----
-# A few projects (lame, libjxl, ...) require autoconf >= 2.73, which is newer
-# than Debian 13 ships (2.72). Upstream's image installs Ubuntu's autoconf 2.73
-# .deb for exactly this reason; autoconf is architecture independent.
+# A few projects (lame, libjxl, ...) require autoconf >= 2.73, which is newer than
+# both Debian 13 (2.72) and Ubuntu 24.04 (2.71) ship. It is built into a side
+# prefix rather than installed over the distro's copy: this host is shared with
+# other projects, and a relocated build keeps its own datadir consistent.
+# native/env.sh puts the prefix first on PATH *for this build only*.
+AC_PREFIX="${FFBUILD_AUTOCONF_PREFIX:-/opt/autoconf-2.73}"
 ac_cur="$(probe_version autoconf --version | awk '{print $NF}')"
-if [[ -z "$ac_cur" ]] || [[ "$(printf '%s\n2.73\n' "$ac_cur" | sort -V | head -n1)" != "2.73" ]]; then
-    echo "== installing autoconf >= 2.73 (found: ${ac_cur:-none}) =="
+if [[ -n "$ac_cur" ]] && [[ "$(printf '%s\n2.73\n' "$ac_cur" | sort -V | head -n1)" == "2.73" ]]; then
+    echo "note: system autoconf $ac_cur already >= 2.73"
+elif [[ -x "$AC_PREFIX/bin/autoconf" ]]; then
+    echo "note: autoconf side prefix present: $AC_PREFIX ($("$AC_PREFIX/bin/autoconf" --version 2>/dev/null | head -n1 | awk '{print $NF}'))"
+else
+    echo "== building autoconf 2.73 into $AC_PREFIX (system has ${ac_cur:-none}) =="
     ac_tmp="$(mktemp -d)"
-    if wget -q -O "$ac_tmp/autoconf.deb" \
-        "https://archive.ubuntu.com/ubuntu/pool/main/a/autoconf/autoconf_2.73-2_all.deb"; then
-        if ! asroot dpkg -i "$ac_tmp/autoconf.deb" 2>/dev/null; then
-            asroot dpkg -i --force-depends "$ac_tmp/autoconf.deb" \
-                || echo "  WARNING: autoconf 2.73 install failed" >&2
+    if wget -q -O "$ac_tmp/autoconf.tar.xz" https://ftp.gnu.org/gnu/autoconf/autoconf-2.73.tar.xz; then
+        tar -xJf "$ac_tmp/autoconf.tar.xz" -C "$ac_tmp"
+        if (
+            cd "$ac_tmp/autoconf-2.73"
+            ./configure --prefix="$AC_PREFIX" >/dev/null 2>&1
+            make -j"$FFBUILD_JOBS" >/dev/null 2>&1
+            asroot make install >/dev/null 2>&1
+        ); then
+            echo "  installed: $(ls "$AC_PREFIX/bin" 2>/dev/null | tr '\n' ' ')"
+        else
+            echo "  WARNING: autoconf 2.73 build/install failed" >&2
         fi
-        echo "  autoconf now: $(autoconf --version 2>/dev/null | head -n1)"
     else
-        echo "  WARNING: could not download the autoconf 2.73 .deb" >&2
+        echo "  WARNING: could not download autoconf 2.73" >&2
     fi
     rm -rf "$ac_tmp"
-else
-    echo "note: autoconf $ac_cur already >= 2.73"
 fi
 
 # --------------------------------------------------------------- automake -----
@@ -252,22 +263,46 @@ else
     echo "note: system automake $am_cur already >= 1.18"
 fi
 
-# ------------------------------------------------------------------ meson -----
-# Distro meson can be older than projects require (fontconfig needs >= 1.11;
-# Debian 13 ships 1.7.0). Upstream's image installs meson via pip for the same
-# reason — do the same when the available one is too old.
+# ----------------------------------------------------------------- python -----
+# The build gets exactly one python: this venv, prepended to PATH by env.sh.
+# Upstream instead pip-installs meson into the distro's python and leans on
+# distro packages (python3-jsonschema, python3-jinja2) for the non-stdlib modules
+# that upstream build systems import. That is fine in a throwaway image, but it
+# rewrites a shared host's Python and leaves those modules as an undeclared
+# assumption. The venv keeps the single-interpreter semantics while owning every
+# module it needs — which also makes it distro-independent.
+PY_PREFIX="${FFBUILD_PYTHON_PREFIX:-/opt/ffbuild-venv}"
 MESON_MIN="${FFBUILD_MESON_MIN:-1.11.0}"
-meson_cur="$(probe_version meson --version)"
-if [[ -z "$meson_cur" ]] || [[ "$(printf '%s\n%s\n' "$meson_cur" "$MESON_MIN" | sort -V | head -n1)" != "$MESON_MIN" ]]; then
-    echo "== installing meson >= $MESON_MIN (found: ${meson_cur:-none}) =="
-    if asroot python3 -m pip install --break-system-packages --upgrade meson; then
-        hash -r 2>/dev/null || true
-        echo "  meson now: $(meson --version 2>/dev/null)"
-    else
-        echo "  WARNING: could not install a newer meson via pip" >&2
-    fi
+# non-stdlib modules imported by the build systems of the projects we compile
+PY_MODULES=(meson jsonschema jinja2)
+# import names differ from pip names (meson installs as `mesonbuild`)
+PY_IMPORTS=(mesonbuild jsonschema jinja2)
+
+py_ok=0
+meson_cur=""
+if [[ -x "$PY_PREFIX/bin/python3" ]]; then
+    py_ok=1
+    for _m in "${PY_IMPORTS[@]}"; do
+        "$PY_PREFIX/bin/python3" -c "import $_m" 2>/dev/null || py_ok=0
+    done
+    meson_cur="$(probe_version "$PY_PREFIX/bin/meson" --version)"
+    [[ -n "$meson_cur" ]] && [[ "$(printf '%s\n%s\n' "$meson_cur" "$MESON_MIN" | sort -V | head -n1)" == "$MESON_MIN" ]] || py_ok=0
+fi
+
+if [[ "$py_ok" -eq 1 ]]; then
+    echo "note: build python ready at $PY_PREFIX (meson $meson_cur)"
 else
-    echo "note: meson $meson_cur already >= $MESON_MIN"
+    echo "== preparing the build python at $PY_PREFIX (meson >= $MESON_MIN) =="
+    if [[ ! -x "$PY_PREFIX/bin/python3" ]]; then
+        asroot python3 -m venv "$PY_PREFIX" || echo "  WARNING: could not create $PY_PREFIX" >&2
+    fi
+    if [[ -x "$PY_PREFIX/bin/pip" ]] && \
+        asroot "$PY_PREFIX/bin/pip" install --quiet --upgrade pip "${PY_MODULES[@]}"; then
+        echo "  python: $("$PY_PREFIX/bin/python3" -V 2>&1)"
+        echo "  meson:  $("$PY_PREFIX/bin/meson" --version 2>/dev/null)"
+    else
+        echo "  WARNING: could not install ${PY_MODULES[*]} into $PY_PREFIX" >&2
+    fi
 fi
 
 # --------------------------------------------------- toolchain descriptor -----

@@ -355,6 +355,27 @@ if [[ -n "$FFBUILD_NO_PROXY" ]]; then
 fi
 export FFBUILD_NO_PROXY
 
+# ------------------------------------------ autotools / python side PREFIX ----
+# Side prefixes are how this project satisfies newer-tool requirements without
+# touching the distro's packages (see native/setup.sh): the build sees them, and
+# other projects on the same host do not.
+#   autoconf /opt/autoconf-2.73/bin  PREPENDED - `autoconf` itself must be >= 2.73
+#   python   /opt/ffbuild-venv/bin   PREPENDED - the build's only python: it
+#            carries meson and every non-stdlib module the build needs, so no
+#            distro python package is ever assumed to be present
+#   automake /opt/automake-1.18/bin  APPENDED  - only the versioned
+#            aclocal-1.18 / automake-1.18 names are wanted, so the distro's plain
+#            `automake` keeps resolving first (see the block below)
+for _d in "${FFBUILD_AUTOCONF_PREFIX:-/opt/autoconf-2.73}/bin" \
+          "${FFBUILD_PYTHON_PREFIX:-/opt/ffbuild-venv}/bin"; do
+    [[ -d "$_d" ]] || continue
+    case ":$PATH:" in
+        *":$_d:"*) ;;
+        *) export PATH="$_d:$PATH" ;;
+    esac
+done
+unset _d
+
 # ------------------------------------------------------- autotools side PREFIX -
 # Exposes versioned names like aclocal-1.18 (needed by gnulib-based projects)
 # while the distro's default `automake` (1.17) keeps resolving first.
