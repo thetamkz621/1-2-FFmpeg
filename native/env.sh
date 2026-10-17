@@ -290,7 +290,13 @@ export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
 #            shows up in a clang build ("davs2 >= 1.6.0 not found using
 #            pkg-config"). Override with e.g. -lc++ for a libc++ toolchain, or
 #            set it empty to add nothing.
-export FFBUILD_EXTRA_LIBS="${FFBUILD_EXTRA_LIBS--lm -lstdc++}"
+#   -latomic librubberband's static archive calls __atomic_is_lock_free but its
+#            .pc carries no Libs.private, so the probe link failed with
+#            "undefined reference to `__atomic_is_lock_free'". Note this cannot
+#            be made a static dependency from here: glib's own .pc files emit
+#            -latomic ahead of this list, so the binary picks it up dynamically
+#            regardless of how it is written here.
+export FFBUILD_EXTRA_LIBS="${FFBUILD_EXTRA_LIBS--lm -lstdc++ -latomic}"
 export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-/toolchain.cmake}"
 export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-/cross.meson}"
 
