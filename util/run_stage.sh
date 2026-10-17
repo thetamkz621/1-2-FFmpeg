@@ -41,7 +41,19 @@ if [[ -n "${STAGENAME:-}" && -n "${FFBUILD_STAGE_ROOT:-}" ]]; then
     cd "$STAGE_DIR"
 fi
 
-git config --global --add safe.directory "$PWD" 2>/dev/null || true
+# Git calls a repository "dubious" when its owner is not the current user, and a
+# stage work dir can legitimately be owned by someone else (sources extracted
+# from a cache tarball or carried over from another machine). Inject the
+# exception into this process tree instead of the host config: safe.directory is
+# read from protected configuration, which includes the command scope, so
+# GIT_CONFIG_* covers every git call below. The previous
+# `git config --global --add` appended a new entry to the host's ~/.gitconfig on
+# every stage that ran, duplicates included.
+_git_cfg_index="${GIT_CONFIG_COUNT:-0}"
+export GIT_CONFIG_COUNT=$((_git_cfg_index + 1))
+export "GIT_CONFIG_KEY_${_git_cfg_index}=safe.directory"
+export "GIT_CONFIG_VALUE_${_git_cfg_index}=$PWD"
+unset _git_cfg_index
 
 # shellcheck disable=SC1090
 source "$STAGE_SCRIPT"
