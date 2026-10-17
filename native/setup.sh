@@ -12,6 +12,7 @@
 #   ./native/setup.sh --all           # + optional deps (rust, node, extra libs)
 #   ./native/setup.sh --with-rust     # rustup + cargo-c (needed by rav1e/librsvg)
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
+#   ./native/setup.sh --no-apt        # skip package installation (host manages its own)
 #   ./native/setup.sh --check         # only verify what is present
 #   ./native/setup.sh --print-apt     # print the apt package list and exit
 #
@@ -26,6 +27,7 @@ DO_ALL=0
 WITH_RUST=0
 WITH_CTNG=0
 WITH_NODE=0
+NO_APT=0
 PRINT_APT=0
 
 while [[ $# -gt 0 ]]; do
@@ -35,8 +37,9 @@ while [[ $# -gt 0 ]]; do
     --with-rust)  WITH_RUST=1 ;;
     --with-node)  WITH_NODE=1 ;;
     --with-ctng)  WITH_CTNG=1 ;;
+    --no-apt)     NO_APT=1 ;;
     --print-apt)  PRINT_APT=1 ;;
-    -h|--help)    sed -n '3,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)    sed -n '3,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "setup.sh: unknown option '$1'" >&2; exit 2 ;;
     esac
     shift
@@ -143,10 +146,15 @@ fi
 
 # ----------------------------------------------------------- apt install -----
 echo "== installing build prerequisites (apt) =="
+# --no-apt is for hosts whose packages are managed outside this script (shared
+# machines, non-Debian distros); the rest of setup still runs.
 # apt may be unusable for reasons unrelated to this project (e.g. a malformed
 # sources file). That must not be fatal: the tools may already be installed.
 APT_OK=1
-if ! asroot apt-get update; then
+if [[ "$NO_APT" -eq 1 ]]; then
+    APT_OK=0
+    echo "note: --no-apt: skipping package installation (tools must already be present)"
+elif ! asroot apt-get update; then
     APT_OK=0
     echo "WARNING: 'apt-get update' failed; skipping apt-based installation." >&2
     echo "         Run './native/setup.sh --check' to see what is already present." >&2
