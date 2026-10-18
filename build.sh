@@ -286,26 +286,24 @@ FF_LIBS="$(xargs <<< "${FF_LIBS:-}")"
 # before it and is dropped by Debian's default -Wl,--as-needed.
 FF_LIBS="$(xargs <<< "${FF_LIBS:-} ${FFBUILD_EXTRA_LIBS:-}")"
 
-# ==================================================== prune dependency junk ==
-# The single place where third-party build outputs are kept out of the artifact.
-# Dependency stages install their own CLI tools and man pages into the shared
-# prefix, and package_variant copies $FFBUILD_PREFIX/{bin,share/man} wholesale.
-#
-# This must run *after* the dependency phase and *before* FFmpeg is installed:
-# the tools have to stay available while dependencies build (glib's
-# `glib-mkenums` is needed by pango), and FFmpeg's own bin/ + man1/ are
-# installed later and are therefore untouched. It also repairs a prefix built by
-# an earlier run whose stages are now skipped via ffbuild/state.
-rm -rf "$FFBUILD_PREFIX/bin" "$FFBUILD_PREFIX/share/man"
-
 # ============================================================ build ffmpeg ==
 FFMPEG_DIR="$FFBUILD_ROOT/ffmpeg"
+# FFmpeg installs into its *own* tree, next to (not inside) the dependency
+# prefix. Upstream gets this split for free from the container layout: stages
+# install to /opt/ffbuild, that tree is merged into the container's /, and
+# FFmpeg is configured with --prefix=/ffbuild/prefix, which is what
+# package_variant reads. With a single shared prefix, packaging copied every
+# dependency's headers, .pc file and stray .so (libglvnd installs
+# libGLdispatch.so*) into the artifact -- visible only for *-shared, since the
+# static variant packages bin/doc/man/presets only.
+FFMPEG_PREFIX="$FFBUILD_ROOT/ffmpeg-prefix"
+rm -rf "$FFMPEG_PREFIX"
 rm -rf "$FFMPEG_DIR"
 git clone --filter=blob:none --branch="$GIT_BRANCH" "$FFMPEG_REPO" "$FFMPEG_DIR"
 cd "$FFMPEG_DIR"
 
 echo "== configuring ffmpeg =="
-./configure --prefix="$FFBUILD_PREFIX" --pkg-config-flags="--static" \
+./configure --prefix="$FFMPEG_PREFIX" --pkg-config-flags="--static" \
     $FFBUILD_TARGET_FLAGS $FF_CONFIGURE \
     --extra-cflags="$FF_CFLAGS" --extra-cxxflags="$FF_CXXFLAGS" --extra-libs="$FF_LIBS" \
     --extra-ldflags="$FF_LDFLAGS" --extra-ldexeflags="$FF_LDEXEFLAGS$RPATH_LDEXEFLAGS" \
@@ -328,7 +326,7 @@ PKGROOT="$FFBUILD_ROOT/pkgroot/$BUILD_NAME"
 rm -rf "$FFBUILD_ROOT/pkgroot"
 mkdir -p "$PKGROOT"
 
-package_variant "$FFBUILD_PREFIX" "$PKGROOT"
+package_variant "$FFMPEG_PREFIX" "$PKGROOT"
 [[ -n "${LICENSE_FILE:-}" && -f "$FFMPEG_DIR/$LICENSE_FILE" ]] && \
     cp "$FFMPEG_DIR/$LICENSE_FILE" "$PKGROOT/LICENSE.txt"
 
