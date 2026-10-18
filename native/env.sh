@@ -225,18 +225,34 @@ if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
     _ffbuild_base_ldflags="-static-libgcc -static-libstdc++ $_ffbuild_base_ldflags"
 fi
 
-# C language standard. This is deliberately pinned and appended last so it wins
-# over a standard that a project's own configure may have detected.
+# C language standard. When set it is appended last, so it wins over a standard
+# that a project's own configure may have detected.
 #
-# Rationale: GCC 14 accepts -std=gnu23 but still reports __STDC_VERSION__ ==
-# 202000L (the C23 final value is 202311L) *while already treating `bool` as a
-# keyword*. Projects that branch on `__STDC_VERSION__ >= 202311L` therefore take
-# the "pre-C23" path and then fail on the now-reserved `bool` — xvid 1.3.7 is a
-# concrete example (its configure injects `-std=gnu23` into CC). GCC 15+ makes
-# the two consistent (202311L); upstream's toolchain is crosstool-ng GCC 16.
-# Pinning a truthful standard restores the semantics those checks assume.
-# Override with FFBUILD_CSTD=gnu23/... or set it empty to use the default.
-FFBUILD_CSTD="${FFBUILD_CSTD-gnu17}"
+# The default exists for one specific compiler defect: GCC 14 accepts
+# -std=gnu23 but still reports __STDC_VERSION__ == 202000L (C23's final value is
+# 202311L) *while already treating `bool` as a keyword*. Projects that branch on
+# `__STDC_VERSION__ >= 202311L` then take the "pre-C23" path and fail on the
+# now-reserved `bool` — xvid is a concrete case (its configure injects
+# `-std=gnu23` into CC). GCC 15+ makes the two consistent, and clang never has
+# the problem (its -std=gnu23 reports 202311L).
+#
+# So the default is applied only when the compiler is actually in that
+# inconsistent state. That is probed rather than version-sniffed. Forcing the
+# standard on a self-consistent compiler buys nothing — clang's default *is*
+# gnu17 — and actively hurts: `-std=gnu17` is rejected outright for C++
+# translation units, so any project that feeds CFLAGS to a C++ compile breaks
+# (davs2 compiles its .cc sources with $(CC); gcc only warns about this, clang
+# errors).
+#
+# Override with FFBUILD_CSTD=gnu23/... or set it empty for the compiler default.
+if [[ -z "${FFBUILD_CSTD+set}" ]]; then
+    if [[ "$("$CC" -std=gnu23 -dM -E - </dev/null 2>/dev/null |
+             awk '/^#define __STDC_VERSION__/ { print $3; exit }')" == "202000L" ]]; then
+        FFBUILD_CSTD="gnu17"
+    else
+        FFBUILD_CSTD=""
+    fi
+fi
 if [[ -n "$FFBUILD_CSTD" ]]; then
     _ffbuild_base_cflags="$_ffbuild_base_cflags -std=$FFBUILD_CSTD"
 fi
@@ -260,6 +276,27 @@ export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-x86_64-unknown-linux-gnu}"
 # FFmpeg's --extra-version suffix. Unset or empty keeps upstream's default
 # behaviour, i.e. the build date in YYYYMMDD form.
 export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
+# Libraries appended *after* every library on FFmpeg's link line (--extra-libs).
+# This position matters: a library that only satisfies references coming from the
+# dependency archives has to appear after them, otherwise Debian's default
+# `-Wl,--as-needed` discards it. Both entries exist for a concrete failure:
+#   -lm      chromaprint/fftw3 do not propagate their libm dependency, so the
+#            probe failed with "undefined reference to symbol 'round@@GLIBC_2.2.5'"
+#            / "DSO missing from command line".
+#   -lstdc++ some dependency archives are C++ while their .pc files declare no
+#            C++ runtime (davs2). clang keeps a __clang_call_terminate thunk in
+#            its objects which references __cxa_begin_catch/std::terminate;
+#            gcc's objects happen not to reference them, which is why this only
+#            shows up in a clang build ("davs2 >= 1.6.0 not found using
+#            pkg-config"). Override with e.g. -lc++ for a libc++ toolchain, or
+#            set it empty to add nothing.
+#   -latomic librubberband's static archive calls __atomic_is_lock_free but its
+#            .pc carries no Libs.private, so the probe link failed with
+#            "undefined reference to `__atomic_is_lock_free'". Note this cannot
+#            be made a static dependency from here: glib's own .pc files emit
+#            -latomic ahead of this list, so the binary picks it up dynamically
+#            regardless of how it is written here.
+export FFBUILD_EXTRA_LIBS="${FFBUILD_EXTRA_LIBS--lm -lstdc++ -latomic}"
 export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-/toolchain.cmake}"
 export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-/cross.meson}"
 
@@ -471,6 +508,7 @@ proxy (https) = ${https_proxy:-<none>}
 proxy (all)   = ${all_proxy:-<none>}
 no_proxy      = ${no_proxy:-<none>}
 extra version = $FFBUILD_EXTRA_VERSION
+extra libs    = ${FFBUILD_EXTRA_LIBS:-<none>}
 ==============================================================================
 EOF
 }

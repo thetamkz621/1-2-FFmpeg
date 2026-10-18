@@ -1,6 +1,7 @@
 # Native build workspace / output
 /.ffbuild/
 /ffbuild/
+/ffbuild-clang/
 /artifacts/
 /.cache/
 /Dockerfile*

@@ -81,26 +81,33 @@ if [[ -d "${FFBUILD_DESTDIR:-}" ]]; then
         done
     fi
 
-    # Prune things that must not reach the packaged artifact, BEFORE merging.
+    # Merge this stage's install tree into the shared prefix, *everything*
+    # included: in our single-filesystem model this merge is the only channel
+    # through which a later stage can use an earlier stage's build-time tools.
     #
-    # Upstream does the equivalent of this at the end of its in-container
-    # run_stage (`rm -rf "$FFBUILD_DESTPREFIX"/bin`), and its Dockerfile copies
-    # $FFBUILD_DESTPREFIX into $FFBUILD_PREFIX only in a *later* layer — so bin/
-    # never reaches the prefix. We merge inside this very script, so the prune
-    # has to happen first; otherwise every dependency's CLI tools leak into the
-    # final tarball's bin/ (observed: xz, xzcat, ...).
+    # Upstream can afford to drop bin/ here (`rm -rf "$FFBUILD_DESTPREFIX"/bin`
+    # at the end of its in-container run_stage) because a Docker sub-stage first
+    # hardlink-copies its DESTDIR onto `/`, which makes e.g. glib's
+    # `glib-mkenums` visible to its siblings (pango needs it) while still keeping
+    # it out of the *merged* prefix. We have no such second channel, so pruning
+    # here breaks the build: with it, `50-librsvg/30-pango` fails with
+    # "Dependency 'glib-2.0' tool variable 'glib_mkenums' contains erroneous
+    # value".
     #
-    # share/man is pruned for the same reason: third-party man pages (X11/XCB
-    # man3, ...) are of no use in an FFmpeg artifact, and package_variant copies
-    # $FFBUILD_PREFIX/share/man wholesale. FFmpeg's own man pages are installed
-    # later by `make install`, so they are unaffected.
-    # NOTE: share/man pruning is a deliberate deviation from upstream.
-    rm -rf "$FFBUILD_DESTPREFIX"/bin "$FFBUILD_DESTPREFIX"/share/man
-
-    # Merge this stage's install tree into the shared prefix.
+    # Third-party tools and man pages are therefore pruned once, at packaging
+    # time, in build.sh (see "prune dependency junk") — after every dependency
+    # has been built and before FFmpeg is installed, so FFmpeg's own bin/ and
+    # man1/ are unaffected.
+    #
+    # --remove-destination is load-bearing: this merge runs again whenever a
+    # completed stage is rebuilt (e.g. after deleting its ffbuild/state marker),
+    # and plain `cp -l` refuses to replace a destination that already exists —
+    # it goes straight to link() and fails with EEXIST, which leaves the *old*
+    # files in place while the command exits non-zero. cp -a is the fallback for
+    # a cross-device destination, where hard links are impossible.
     if [[ -d "$FFBUILD_DESTPREFIX" ]]; then
-        cp -al "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/ 2>/dev/null || \
-            cp -a "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/
+        cp -al --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/ ||
+            cp -a --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/
     fi
 fi
 

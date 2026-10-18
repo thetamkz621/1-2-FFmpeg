@@ -1,0 +1,14 @@
+--- a/build/linux/configure
++++ b/build/linux/configure
+@@ -926,7 +926,10 @@
+     if (${cross_prefix}strings -a conftest.o | grep -q BIGE) && (${cross_prefix}strings -a conftest.o | grep -q FPendian) ; then
+         define WORDS_BIGENDIAN
+         CPU_ENDIAN="big-endian"
+-    elif !(${cross_prefix}strings -a conftest.o | grep -q EGIB && ${cross_prefix}strings -a conftest.o | grep -q naidnePF) ; then
++    # NOTE: upstream's sed above rewrites this check to `grep -q bss`, which
++    # assumes gcc always emits a (possibly empty) .bss section. clang omits
++    # empty sections, so use tokens both compilers emit.
++    elif !(${cross_prefix}strings -a conftest.o | grep -qF .text && ${cross_prefix}strings -a conftest.o | grep -qF .data) ; then
+         die "endian test failed"
+     fi
+ fi
