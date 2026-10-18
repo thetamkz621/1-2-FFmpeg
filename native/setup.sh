@@ -13,6 +13,7 @@
 #   ./native/setup.sh --with-rust     # rustup + cargo-c (needed by rav1e/librsvg)
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
 #   ./native/setup.sh --no-apt        # skip package installation (host manages its own)
+#   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
 #   ./native/setup.sh --check         # only verify what is present
 #   ./native/setup.sh --print-apt     # print the apt package list and exit
 #
@@ -29,6 +30,7 @@ WITH_CTNG=0
 WITH_NODE=0
 NO_APT=0
 PRINT_APT=0
+ONLY_BUILDTOOLS=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,7 +41,8 @@ while [[ $# -gt 0 ]]; do
     --with-ctng)  WITH_CTNG=1 ;;
     --no-apt)     NO_APT=1 ;;
     --print-apt)  PRINT_APT=1 ;;
-    -h|--help)    sed -n '3,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --buildtools-only) ONLY_BUILDTOOLS=1 ;;
+    -h|--help)    sed -n '3,19p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "setup.sh: unknown option '$1'" >&2; exit 2 ;;
     esac
     shift
@@ -65,6 +68,11 @@ probe_version() {
     local out=""
     out="$("$@" 2>/dev/null | head -n1)" || out=""
     printf '%s\n' "$out"
+}
+
+# Version comparison used by both --check and the install sections.
+version_ge() {  # $1 >= $2 (version sort)
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$2" ]]
 }
 
 # --------------------------------------------------------------- packages -----
@@ -107,7 +115,9 @@ if [[ "$PRINT_APT" -eq 1 ]]; then
 fi
 
 # ------------------------------------------------------------- check mode -----
-REQUIRED_TOOLS=(gcc g++ make cmake meson ninja pkg-config git patch tar xz zip nasm yasm autoconf automake libtoolize python3 gen-implib git-mini-clone retry-tool)
+# autoconf / automake / cmake / meson 不在此列：它们可能是 setup 自己构建的托管版本，
+# 由下面的 "build tools" 表按版本下限判定。
+REQUIRED_TOOLS=(gcc g++ make ninja pkg-config git patch tar xz zip nasm yasm libtoolize python3 gen-implib git-mini-clone retry-tool)
 OPTIONAL_TOOLS=(clang cargo rustc node 7z xxd gperf bison flex ragel itstool help2man)
 
 do_check() {
@@ -123,6 +133,53 @@ do_check() {
             printf '  [MISSING] %-14s\n' "$t"
         fi
     done
+    echo "== build tools (policy: install only when the system is older) =="
+    local ac_cur am_cur cm_cur ac_man am_man cm_man
+    ac_cur="$(probe_version autoconf --version | awk '{print $NF}')"
+    am_cur="$(probe_version automake --version | awk '{print $NF}')"
+    cm_cur="$(probe_version cmake --version | awk '{print $3}')"
+    ac_man="$(probe_version "$FFBUILD_AUTOCONF_PREFIX/bin/autoconf" --version | awk '{print $NF}')"
+    am_man="$(probe_version "$FFBUILD_AUTOMAKE_PREFIX/bin/automake" --version | awk '{print $NF}')"
+    cm_man="$(probe_version "$FFBUILD_CMAKE_PREFIX/bin/cmake" --version | awk '{print $3}')"
+    btv() {  # <name> <system> <min> <managed>
+        local verdict
+        if [[ -n "$2" ]] && version_ge "$2" "$3"; then
+            verdict="system ok"
+        elif [[ -n "$4" ]] && version_ge "$4" "$3"; then
+            verdict="managed ok"
+        else
+            verdict="NEEDS INSTALL"
+        fi
+        printf '  %-9s system=%-8s min=%-7s managed=%-8s %s\n' \
+            "$1" "${2:-none}" "$3" "${4:-none}" "$verdict"
+    }
+    btv autoconf "$ac_cur" "$FFBUILD_BT_MIN_autoconf" "$ac_man"
+    btv automake "$am_cur" "$FFBUILD_BT_MIN_automake" "$am_man"
+    # 裸名达标不等于够用：libiconv 的 Makefile.devel 写死 automake-1.18。
+    local am_major
+    am_major="${FFBUILD_BT_INSTALL_automake%.*}"
+    if command -v "automake-$am_major" >/dev/null 2>&1; then
+        printf '  %-9s automake-%s: %s\n' "" "$am_major" "$(command -v "automake-$am_major")"
+    else
+        printf '  %-9s [MISSING] automake-%s (libiconv calls it by name)\n' "" "$am_major"
+    fi
+    btv cmake    "$cm_cur" "$FFBUILD_BT_MIN_cmake"    "$cm_man"
+    local py_bin py_ver
+    py_bin=""
+    for _c in python3.13 python3.12 python3.11 python3.10 python3; do
+        command -v "$_c" >/dev/null 2>&1 || continue
+        _v="$("$_c" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
+        [[ -n "$_v" ]] || continue
+        if version_ge "$_v" "$FFBUILD_BT_SYSTEM_python"; then py_bin="$_c"; py_ver="$_v"; break; fi
+    done
+    if [[ -n "$py_bin" ]]; then
+        printf '  %-9s system=%-8s min=%-7s ok (%s)\n' python "$py_ver" "$FFBUILD_BT_SYSTEM_python" "$py_bin"
+    else
+        printf '  %-9s system=%-8s min=%-7s NEEDS INSTALL\n' python "${py_ver:-none}" "$FFBUILD_BT_SYSTEM_python"
+    fi
+    printf '  managed root: %s\n' "$FFBUILD_BUILDTOOLS_PREFIX"
+    echo
+
     echo "== optional tools (only needed by some variants) =="
     for t in "${OPTIONAL_TOOLS[@]}"; do
         if command -v "$t" >/dev/null 2>&1; then
@@ -194,115 +251,171 @@ else
     echo "note: apt not usable on this host — skipping package installation"
 fi
 
-# --------------------------------------------------------------- autoconf -----
-# A few projects (lame, libjxl, ...) require autoconf >= 2.73, which is newer than
-# both Debian 13 (2.72) and Ubuntu 24.04 (2.71) ship. It is built into a side
-# prefix rather than installed over the distro's copy: this host is shared with
-# other projects, and a relocated build keeps its own datadir consistent.
-# native/env.sh puts the prefix first on PATH *for this build only*.
-AC_PREFIX="${FFBUILD_AUTOCONF_PREFIX:-/opt/autoconf-2.73}"
-ac_cur="$(probe_version autoconf --version | awk '{print $NF}')"
-if [[ -n "$ac_cur" ]] && [[ "$(printf '%s\n2.73\n' "$ac_cur" | sort -V | head -n1)" == "2.73" ]]; then
-    echo "note: system autoconf $ac_cur already >= 2.73"
-elif [[ -x "$AC_PREFIX/bin/autoconf" ]]; then
-    echo "note: autoconf side prefix present: $AC_PREFIX ($("$AC_PREFIX/bin/autoconf" --version 2>/dev/null | head -n1 | awk '{print $NF}'))"
-else
-    echo "== building autoconf 2.73 into $AC_PREFIX (system has ${ac_cur:-none}) =="
-    ac_tmp="$(mktemp -d)"
-    if wget -q -O "$ac_tmp/autoconf.tar.xz" https://ftp.gnu.org/gnu/autoconf/autoconf-2.73.tar.xz; then
-        tar -xJf "$ac_tmp/autoconf.tar.xz" -C "$ac_tmp"
-        if (
-            cd "$ac_tmp/autoconf-2.73"
-            ./configure --prefix="$AC_PREFIX" >/dev/null 2>&1
-            make -j"$FFBUILD_JOBS" >/dev/null 2>&1
-            asroot make install >/dev/null 2>&1
-        ); then
-            echo "  installed: $(ls "$AC_PREFIX/bin" 2>/dev/null | tr '\n' ' ')"
-        else
-            echo "  WARNING: autoconf 2.73 build/install failed" >&2
-        fi
-    else
-        echo "  WARNING: could not download autoconf 2.73" >&2
+# ------------------------------------------------------------ build tools -----
+# 版本下限与来源见 native/buildtools.lock。策略是"只补不足"：系统版本够用就
+# 不装；不够才把对应版本构建进 $FFBUILD_BUILDTOOLS_PREFIX（默认 <repo>/.buildtools）。
+# 该目录属当前用户、位于仓库内、不入库，安装过程不需要 root，也不影响同机其他项目。
+BT_PREFIX="$FFBUILD_BUILDTOOLS_PREFIX"
+BT_JOBS="${FFBUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+mkdir -p "$BT_PREFIX"
+
+bt_fetch() {  # <url> <dest> <sha256>
+    local url="$1" dest="$2" want="$3" got=""
+    if ! curl -fsSL --max-time 300 -o "$dest" "$url" 2>/dev/null &&
+       ! wget -q -O "$dest" "$url" 2>/dev/null; then
+        echo "  WARNING: could not download $url" >&2
+        return 1
     fi
-    rm -rf "$ac_tmp"
+    got="$(sha256sum "$dest" | awk '{print $1}')"
+    if [[ "$got" != "$want" ]]; then
+        echo "  ERROR: checksum mismatch for $url" >&2
+        echo "    expected $want" >&2
+        echo "    got      $got" >&2
+        rm -f "$dest"
+        return 1
+    fi
+}
+
+bt_unpack() {  # <url> <sha256> -> prints a temp dir containing ./src
+    local tmp
+    tmp="$(mktemp -d)"
+    bt_fetch "$1" "$tmp/src.tar" "$2" || { rm -rf "$tmp"; return 1; }
+    mkdir -p "$tmp/src"
+    tar -xf "$tmp/src.tar" -C "$tmp/src" --strip-components=1 || { rm -rf "$tmp"; return 1; }
+    printf '%s\n' "$tmp"
+}
+
+# Build tools must not inherit the *FFmpeg build* environment: env.sh exports
+# CFLAGS/CXXFLAGS/LDFLAGS pointing at $FFBUILD_PREFIX, whose headers and libs are
+# for the target dependency tree. Feeding them to cmake's bootstrap produced
+# "undefined reference to inflate" (prefix zlib.h, no -lz on the link line).
+bt_clean_env() {  # runs a command without the build's compiler/flag overrides
+    (
+        unset CC CXX LD AR RANLIB NM STRIP
+        unset CFLAGS CXXFLAGS LDFLAGS LDEXEFLAGS CPPFLAGS
+        unset PKG_CONFIG_PATH PKG_CONFIG_LIBDIR ACLOCAL_PATH
+        "$@"
+    )
+}
+
+bt_build_configure() {  # <url> <sha256> <prefix>
+    local tmp
+    tmp="$(bt_unpack "$1" "$2")" || return 1
+    if bt_clean_env bash -c 'cd "$1" && ./configure --prefix="$2" && make -j"$3" && make install' \
+           _ "$tmp/src" "$3" "$BT_JOBS" >/dev/null 2>&1; then
+        rm -rf "$tmp"
+        return 0
+    fi
+    echo "  WARNING: build failed; source tree left at $tmp/src" >&2
+    return 1
+}
+
+bt_build_cmake() {  # <url> <sha256> <prefix>
+    local tmp
+    tmp="$(bt_unpack "$1" "$2")" || return 1
+    if bt_clean_env bash -c 'cd "$1" && ./bootstrap --prefix="$2" --parallel="$3" && make -j"$3" && make install' \
+           _ "$tmp/src" "$3" "$BT_JOBS" >/dev/null 2>&1; then
+        rm -rf "$tmp"
+        return 0
+    fi
+    echo "  WARNING: build failed; source tree left at $tmp/src" >&2
+    return 1
+}
+
+# --------------------------------------------------------------- autoconf -----
+ac_cur="$(probe_version autoconf --version | awk '{print $NF}')"
+ac_man="$(probe_version "$FFBUILD_AUTOCONF_PREFIX/bin/autoconf" --version | awk '{print $NF}')"
+if [[ -n "$ac_cur" ]] && version_ge "$ac_cur" "$FFBUILD_BT_MIN_autoconf"; then
+    echo "note: system autoconf $ac_cur >= $FFBUILD_BT_MIN_autoconf"
+elif [[ -n "$ac_man" ]] && version_ge "$ac_man" "$FFBUILD_BT_MIN_autoconf"; then
+    echo "note: managed autoconf $ac_man ready at $FFBUILD_AUTOCONF_PREFIX"
+else
+    echo "== building autoconf $FFBUILD_BT_INSTALL_autoconf into $FFBUILD_AUTOCONF_PREFIX =="
+    bt_build_configure "$FFBUILD_BT_URL_autoconf" "$FFBUILD_BT_SHA256_autoconf" "$FFBUILD_AUTOCONF_PREFIX" ||
+        echo "  WARNING: autoconf build failed" >&2
 fi
 
 # --------------------------------------------------------------- automake -----
-# gnulib-based projects (libiconv) invoke the *versioned* names aclocal-1.18 /
-# automake-1.18, which Debian 13 does not ship (it has 1.17). Install automake
-# 1.18 into a side prefix and append it to PATH: the versioned names then
-# resolve, while plain `automake` still resolves to the distro's 1.17 so other
-# stages keep their known-good behaviour.
-AM_PREFIX="${FFBUILD_AUTOMAKE_PREFIX:-/opt/automake-1.18}"
+# 裸名 automake 的图内下限是 1.16.3（libxml2），而 libiconv 的 Makefile.devel
+# 写死 automake-1.18 / aclocal-1.18。只要系统不是 >= 1.18，就要装一份 1.18，
+# 才能同时满足这两条。
 am_cur="$(probe_version automake --version | awk '{print $NF}')"
-if [[ -z "$am_cur" ]] || [[ "$(printf '%s\n1.18\n' "$am_cur" | sort -V | head -n1)" != "1.18" ]]; then
-    if command -v automake-1.18 >/dev/null 2>&1; then
-        echo "note: automake-1.18 already available"
-    else
-        echo "== installing automake 1.18 into $AM_PREFIX =="
-        am_tmp="$(mktemp -d)"
-        am_url="https://ftp.gnu.org/gnu/automake/automake-1.18.1.tar.xz"
-        if wget -q -O "$am_tmp/automake.tar.xz" "$am_url"; then
-            tar -xJf "$am_tmp/automake.tar.xz" -C "$am_tmp"
-            if (
-                cd "$am_tmp/automake-1.18.1"
-                ./configure --prefix="$AM_PREFIX" >/dev/null 2>&1
-                make -j"$FFBUILD_JOBS" >/dev/null 2>&1
-                asroot make install >/dev/null 2>&1
-            ); then
-                echo "  installed: $(ls "$AM_PREFIX/bin" 2>/dev/null | tr '\n' ' ')"
-            else
-                echo "  WARNING: automake 1.18 build/install failed" >&2
-            fi
-        else
-            echo "  WARNING: could not download automake 1.18" >&2
-        fi
-        rm -rf "$am_tmp"
-    fi
+am_major="${FFBUILD_BT_INSTALL_automake%.*}"
+am_man="$(probe_version "$FFBUILD_AUTOMAKE_PREFIX/bin/automake" --version | awk '{print $NF}')"
+if [[ -n "$am_cur" ]] && version_ge "$am_cur" "$am_major"; then
+    echo "note: system automake $am_cur provides automake-$am_major"
+elif [[ -n "$am_man" ]] && version_ge "$am_man" "$am_major"; then
+    echo "note: managed automake $am_man ready at $FFBUILD_AUTOMAKE_PREFIX"
 else
-    echo "note: system automake $am_cur already >= 1.18"
+    echo "== building automake $FFBUILD_BT_INSTALL_automake into $FFBUILD_AUTOMAKE_PREFIX =="
+    bt_build_configure "$FFBUILD_BT_URL_automake" "$FFBUILD_BT_SHA256_automake" "$FFBUILD_AUTOMAKE_PREFIX" ||
+        echo "  WARNING: automake build failed" >&2
+fi
+
+# ------------------------------------------------------------------ cmake -----
+cm_cur="$(probe_version cmake --version | awk '{print $3}')"
+cm_man="$(probe_version "$FFBUILD_CMAKE_PREFIX/bin/cmake" --version | awk '{print $3}')"
+if [[ -n "$cm_cur" ]] && version_ge "$cm_cur" "$FFBUILD_BT_MIN_cmake"; then
+    echo "note: system cmake $cm_cur >= $FFBUILD_BT_MIN_cmake"
+elif [[ -n "$cm_man" ]] && version_ge "$cm_man" "$FFBUILD_BT_MIN_cmake"; then
+    echo "note: managed cmake $cm_man ready at $FFBUILD_CMAKE_PREFIX"
+else
+    echo "== building cmake $FFBUILD_BT_INSTALL_cmake into $FFBUILD_CMAKE_PREFIX (takes a while) =="
+    bt_build_cmake "$FFBUILD_BT_URL_cmake" "$FFBUILD_BT_SHA256_cmake" "$FFBUILD_CMAKE_PREFIX" ||
+        echo "  WARNING: cmake build failed" >&2
 fi
 
 # ----------------------------------------------------------------- python -----
-# The build gets exactly one python: this venv, prepended to PATH by env.sh.
-# Upstream instead pip-installs meson into the distro's python and leans on
-# distro packages (python3-jsonschema, python3-jinja2) for the non-stdlib modules
-# that upstream build systems import. That is fine in a throwaway image, but it
-# rewrites a shared host's Python and leaves those modules as an undeclared
-# assumption. The venv keeps the single-interpreter semantics while owning every
-# module it needs — which also makes it distro-independent.
-PY_PREFIX="${FFBUILD_PYTHON_PREFIX:-/opt/ffbuild-venv}"
-MESON_MIN="${FFBUILD_MESON_MIN:-1.11.0}"
-# non-stdlib modules imported by the build systems of the projects we compile
-PY_MODULES=(meson jsonschema jinja2)
-# import names differ from pip names (meson installs as `mesonbuild`)
-PY_IMPORTS=(mesonbuild jsonschema jinja2)
+# 构建只需要一个解释器：这个 venv。它同时提供 meson 与 jsonschema/jinja2。
+# Python 本身不构建——版本不足时给出对应发行版的安装命令。
+PY_MIN="$FFBUILD_BT_SYSTEM_python"
+PYBIN=""
+for _c in python3.13 python3.12 python3.11 python3.10 python3; do
+    command -v "$_c" >/dev/null 2>&1 || continue
+    _v="$("$_c" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
+    [[ -n "$_v" ]] || continue
+    if version_ge "$_v" "$PY_MIN"; then PYBIN="$(command -v "$_c")"; break; fi
+done
+if [[ -z "$PYBIN" ]]; then
+    echo "ERROR: no python >= $PY_MIN found; it is needed to host the build venv." >&2
+    echo "  Rocky/RHEL 8:  sudo dnf install python3.12" >&2
+    echo "  Debian/Ubuntu: sudo apt-get install python3" >&2
+    exit 1
+fi
 
+PY_MODULES=("meson==$FFBUILD_BT_MESON" jsonschema jinja2)
+PY_IMPORTS=(mesonbuild jsonschema jinja2)
 py_ok=0
-meson_cur=""
-if [[ -x "$PY_PREFIX/bin/python3" ]]; then
+py_meson=""
+if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/python3" ]]; then
     py_ok=1
     for _m in "${PY_IMPORTS[@]}"; do
-        "$PY_PREFIX/bin/python3" -c "import $_m" 2>/dev/null || py_ok=0
+        "$FFBUILD_PYTHON_PREFIX/bin/python3" -c "import $_m" 2>/dev/null || py_ok=0
     done
-    meson_cur="$(probe_version "$PY_PREFIX/bin/meson" --version)"
-    [[ -n "$meson_cur" ]] && [[ "$(printf '%s\n%s\n' "$meson_cur" "$MESON_MIN" | sort -V | head -n1)" == "$MESON_MIN" ]] || py_ok=0
+    py_meson="$(probe_version "$FFBUILD_PYTHON_PREFIX/bin/meson" --version)"
+    [[ -n "$py_meson" ]] && version_ge "$py_meson" "$FFBUILD_BT_MESON" || py_ok=0
 fi
 
 if [[ "$py_ok" -eq 1 ]]; then
-    echo "note: build python ready at $PY_PREFIX (meson $meson_cur)"
+    echo "note: build venv ready at $FFBUILD_PYTHON_PREFIX (meson $py_meson)"
 else
-    echo "== preparing the build python at $PY_PREFIX (meson >= $MESON_MIN) =="
-    if [[ ! -x "$PY_PREFIX/bin/python3" ]]; then
-        asroot python3 -m venv "$PY_PREFIX" || echo "  WARNING: could not create $PY_PREFIX" >&2
+    echo "== preparing build venv at $FFBUILD_PYTHON_PREFIX =="
+    if [[ ! -x "$FFBUILD_PYTHON_PREFIX/bin/python3" ]]; then
+        "$PYBIN" -m venv "$FFBUILD_PYTHON_PREFIX" ||
+            { echo "  WARNING: could not create venv with $PYBIN" >&2; }
     fi
-    if [[ -x "$PY_PREFIX/bin/pip" ]] && \
-        asroot "$PY_PREFIX/bin/pip" install --quiet --upgrade pip "${PY_MODULES[@]}"; then
-        echo "  python: $("$PY_PREFIX/bin/python3" -V 2>&1)"
-        echo "  meson:  $("$PY_PREFIX/bin/meson" --version 2>/dev/null)"
+    if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/pip" ]] &&
+        "$FFBUILD_PYTHON_PREFIX/bin/pip" install --quiet --upgrade pip "${PY_MODULES[@]}"; then
+        echo "  python: $("$FFBUILD_PYTHON_PREFIX/bin/python3" -V 2>&1)"
+        echo "  meson:  $("$FFBUILD_PYTHON_PREFIX/bin/meson" --version 2>/dev/null)"
     else
-        echo "  WARNING: could not install ${PY_MODULES[*]} into $PY_PREFIX" >&2
+        echo "  WARNING: could not install ${PY_MODULES[*]} into $FFBUILD_PYTHON_PREFIX" >&2
     fi
+fi
+
+if [[ "$ONLY_BUILDTOOLS" -eq 1 ]]; then
+    echo "note: --buildtools-only set; skipping system paths and build root"
+    exit 0
 fi
 
 # --------------------------------------------------- toolchain descriptor -----

@@ -307,7 +307,17 @@ export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
 # Upstream's Docker layers copy $FFBUILD_PREFIX/share/aclocal into
 # /usr/share/aclocal (10-xorg-macros, 45-x11). Natively we simply advertise the
 # prefix's aclocal dir instead of polluting the system one.
-export ACLOCAL_PATH="$FFBUILD_PREFIX/share/aclocal${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
+#
+# The system acdir must be listed explicitly as well: aclocal searches its own
+# $prefix/share/aclocal plus ACLOCAL_PATH, and a side-prefix automake's own
+# prefix is *not* /usr. Without this, `aclocal` from .buildtools cannot find
+# third-party macros such as pkg.m4 (libxml2 fails with "couldn't find pkg.m4").
+_ffbuild_aclocal_path="$FFBUILD_PREFIX/share/aclocal"
+for _d in /usr/share/aclocal /usr/local/share/aclocal; do
+    [[ -d "$_d" ]] && _ffbuild_aclocal_path="$_ffbuild_aclocal_path:$_d"
+done
+export ACLOCAL_PATH="$_ffbuild_aclocal_path${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
+unset _ffbuild_aclocal_path _d
 
 export FFBUILD_JOBS="${FFBUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 # NB: do NOT export MAKEFLAGS globally. Some autotools bootstrap steps
@@ -377,38 +387,65 @@ if [[ -n "$FFBUILD_NO_PROXY" ]]; then
 fi
 export FFBUILD_NO_PROXY
 
-# ------------------------------------------ autotools / python side PREFIX ----
-# Side prefixes are how this project satisfies newer-tool requirements without
-# touching the distro's packages (see native/setup.sh): the build sees them, and
-# other projects on the same host do not.
-#   autoconf /opt/autoconf-2.73/bin  PREPENDED - `autoconf` itself must be >= 2.73
-#   python   /opt/ffbuild-venv/bin   PREPENDED - the build's only python: it
-#            carries meson and every non-stdlib module the build needs, so no
-#            distro python package is ever assumed to be present
-#   automake /opt/automake-1.18/bin  APPENDED  - only the versioned
-#            aclocal-1.18 / automake-1.18 names are wanted, so the distro's plain
-#            `automake` keeps resolving first (see the block below)
-for _d in "${FFBUILD_AUTOCONF_PREFIX:-/opt/autoconf-2.73}/bin" \
-          "${FFBUILD_PYTHON_PREFIX:-/opt/ffbuild-venv}/bin"; do
-    [[ -d "$_d" ]] || continue
-    case ":$PATH:" in
-        *":$_d:"*) ;;
-        *) export PATH="$_d:$PATH" ;;
-    esac
-done
-unset _d
-
-# ------------------------------------------------------- autotools side PREFIX -
-# Exposes versioned names like aclocal-1.18 (needed by gnulib-based projects)
-# while the distro's default `automake` (1.17) keeps resolving first.
-_ffbuild_am_bin="${FFBUILD_AUTOMAKE_PREFIX:-/opt/automake-1.18}/bin"
-if [[ -d "$_ffbuild_am_bin" ]]; then
-    case ":$PATH:" in
-        *":$_ffbuild_am_bin:"*) ;;
-        *) export PATH="$PATH:$_ffbuild_am_bin" ;;
-    esac
+# ---------------------------------------------------- build tools (managed) ---
+# 构建器版本下限见 native/buildtools.lock；不满足下限的工具由 native/setup.sh
+# 装进 $FFBUILD_BUILDTOOLS_PREFIX（默认 <repo>/.buildtools，仓库内、不入库）。
+#
+# 策略是“只补不足”，因此这里只做判定，不做版本替换：
+#   * 系统版本 >= 下限 → 托管版本完全不进 PATH（automake 例外：仍追加，
+#     只为提供 automake-1.18 / aclocal-1.18 这两个版本名）；
+#   * 系统版本 <  下限 → 托管版本的 bin 前置；
+#   * python           → 构建专用 venv 始终前置：它是构建唯一的解释器，
+#     既提供 meson，也提供 jsonschema/jinja2 这些非标准库模块。
+FFBUILD_BUILDTOOLS_PREFIX="${FFBUILD_BUILDTOOLS_PREFIX:-$FFBUILD_REPO_ROOT/.buildtools}"
+export FFBUILD_BUILDTOOLS_PREFIX
+# shellcheck source=native/buildtools.lock
+if [[ -f "$FFBUILD_REPO_ROOT/native/buildtools.lock" ]]; then
+    source "$FFBUILD_REPO_ROOT/native/buildtools.lock"
 fi
-unset _ffbuild_am_bin
+
+_ffbuild_ver_ge() {  # $1 >= $2 (version sort)
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$2" ]]
+}
+_ffbuild_path_prepend() {
+    [[ -d "$1" ]] || return 0
+    case ":$PATH:" in *":$1:"*) ;; *) PATH="$1:$PATH" ;; esac
+}
+_ffbuild_path_append() {
+    [[ -d "$1" ]] || return 0
+    case ":$PATH:" in *":$1:"*) ;; *) PATH="$PATH:$1" ;; esac
+}
+
+# 托管目录（变量名沿用旧称，便于单独覆盖某个工具）
+FFBUILD_AUTOCONF_PREFIX="${FFBUILD_AUTOCONF_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/autoconf-${FFBUILD_BT_INSTALL_autoconf:-2.73}}"
+FFBUILD_AUTOMAKE_PREFIX="${FFBUILD_AUTOMAKE_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/automake-${FFBUILD_BT_INSTALL_automake:-1.18.1}}"
+FFBUILD_CMAKE_PREFIX="${FFBUILD_CMAKE_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/cmake-${FFBUILD_BT_INSTALL_cmake:-3.28.3}}"
+FFBUILD_PYTHON_PREFIX="${FFBUILD_PYTHON_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/venv}"
+export FFBUILD_AUTOCONF_PREFIX FFBUILD_AUTOMAKE_PREFIX FFBUILD_CMAKE_PREFIX FFBUILD_PYTHON_PREFIX
+
+_ac_cur="$(autoconf --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+if [[ -z "$_ac_cur" ]] || ! _ffbuild_ver_ge "$_ac_cur" "${FFBUILD_BT_MIN_autoconf:-2.73}"; then
+    _ffbuild_path_prepend "$FFBUILD_AUTOCONF_PREFIX/bin"
+fi
+
+_cm_cur="$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}')"
+if [[ -z "$_cm_cur" ]] || ! _ffbuild_ver_ge "$_cm_cur" "${FFBUILD_BT_MIN_cmake:-3.28}"; then
+    _ffbuild_path_prepend "$FFBUILD_CMAKE_PREFIX/bin"
+fi
+
+# automake 双轨：裸名看下限，版本名（gnulib）永远要 1.18
+_am_cur="$(automake --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+if [[ -n "$_am_cur" ]] && _ffbuild_ver_ge "$_am_cur" "${FFBUILD_BT_MIN_automake:-1.16.3}"; then
+    _ffbuild_path_append "$FFBUILD_AUTOMAKE_PREFIX/bin"
+else
+    _ffbuild_path_prepend "$FFBUILD_AUTOMAKE_PREFIX/bin"
+fi
+
+if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/python3" ]]; then
+    _ffbuild_path_prepend "$FFBUILD_PYTHON_PREFIX/bin"
+fi
+unset _ac_cur _cm_cur _am_cur
+export PATH
 
 # -------------------------------------------------------------- rust PATH -----
 # rav1e and librsvg build with cargo; librsvg even runs `cargo vendor` during its

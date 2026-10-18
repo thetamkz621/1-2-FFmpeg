@@ -14,8 +14,9 @@ Currently, only the `linux64` target is supported. Upstream's other targets are 
 
 ### Prerequisites
 
-Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root); `setup.sh` installs the
-rest from apt — gcc/g++/clang, autoconf/automake, cmake/meson, python3 and the usual CLI tools.
+Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root). `setup.sh` installs the
+build prerequisites from apt — gcc/g++/clang, autoconf/automake, cmake/meson, python3 and the
+usual CLI tools — and builds the ones the distro is too old for into `.buildtools/`.
 
 `./native/setup.sh --check` prints the required and optional tool list without changing anything.
 
@@ -98,6 +99,7 @@ FFBUILD_PROXY= ./native/download.sh                   # ignore the shell's proxy
 
 ```
 ffbuild/{prefix,work,log,state,pkgroot}   build root (FFBUILD_ROOT)
+.buildtools/                              managed build tools, not tracked by git
 .cache/downloads/                         dependency source cache
 artifacts/                                build output
 ```

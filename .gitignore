@@ -4,6 +4,7 @@
 /ffbuild-clang/
 /artifacts/
 /.cache/
+/.buildtools/
 /Dockerfile*
 
 # Local scratch

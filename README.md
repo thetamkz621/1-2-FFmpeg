@@ -14,8 +14,9 @@
 
 ### 前置
 
-Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）；其余由 `setup.sh` 通过 apt 安装——
-gcc/g++/clang、autoconf/automake、cmake/meson、python3 及常用命令行工具。
+Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）。构建前置依赖由 `setup.sh` 通过
+apt 安装——gcc/g++/clang、autoconf/automake、cmake/meson、python3 及常用命令行工具；
+发行版版本过旧的则源码构建进 `.buildtools/`。
 
 `./native/setup.sh --check` 只报告所需与可选工具，不改动系统。
 
@@ -95,6 +96,7 @@ FFBUILD_PROXY= ./native/download.sh                   # 忽略 shell 中的代�
 
 ```
 ffbuild/{prefix,work,log,state,pkgroot}   构建根（FFBUILD_ROOT）
+.buildtools/                              托管的构建工具，不入库
 .cache/downloads/                         依赖源码缓存
 artifacts/                                产物
 ```
