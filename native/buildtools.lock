@@ -40,6 +40,14 @@ FFBUILD_BT_INSTALL_cmake="${FFBUILD_BT_INSTALL_cmake:-3.28.3}"
 FFBUILD_BT_URL_cmake="${FFBUILD_BT_URL_cmake:-https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3.tar.gz}"
 FFBUILD_BT_SHA256_cmake="${FFBUILD_BT_SHA256_cmake:-72b7570e5c8593de6ac4ab433b73eab18c5fb328880460c86ce32608141ad5c1}"
 
+# ----------------------------------------------------------------- gettext -----
+# zvbi's configure.ac declares AM_GNU_GETTEXT_VERSION([0.21]); autopoint refuses
+# to run when the installed infrastructure is older (EL8 ships 0.19.8).
+FFBUILD_BT_MIN_gettext="${FFBUILD_BT_MIN_gettext:-0.21}"
+FFBUILD_BT_INSTALL_gettext="${FFBUILD_BT_INSTALL_gettext:-0.22.5}"
+FFBUILD_BT_URL_gettext="${FFBUILD_BT_URL_gettext:-https://ftp.gnu.org/gnu/gettext/gettext-0.22.5.tar.xz}"
+FFBUILD_BT_SHA256_gettext="${FFBUILD_BT_SHA256_gettext:-fe10c37353213d78a5b83d48af231e005c4da84db5ce88037d88355938259640}"
+
 # ----------------------------------------------------------------- python -----
 # meson 1.12.1 的 Requires-Python 是 >=3.10；Python 不构建，只在版本不足时提示安装。
 FFBUILD_BT_SYSTEM_python="${FFBUILD_BT_SYSTEM_python:-3.10}"

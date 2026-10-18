@@ -411,6 +411,21 @@ else
         echo "  WARNING: cmake build failed" >&2
 fi
 
+# ----------------------------------------------------------------- gettext -----
+# zvbi 的 configure.ac 声明 AM_GNU_GETTEXT_VERSION([0.21])，autopoint 在版本
+# 不足时会直接拒绝执行（EL8 只有 0.19.8）。
+ap_cur="$(probe_version autopoint --version | awk '{print $NF}')"
+ap_man="$(probe_version "$FFBUILD_GETTEXT_PREFIX/bin/autopoint" --version | awk '{print $NF}')"
+if [[ -n "$ap_cur" ]] && version_ge "$ap_cur" "$FFBUILD_BT_MIN_gettext"; then
+    echo "note: system autopoint $ap_cur >= $FFBUILD_BT_MIN_gettext"
+elif [[ -n "$ap_man" ]] && version_ge "$ap_man" "$FFBUILD_BT_MIN_gettext"; then
+    echo "note: managed gettext $ap_man ready at $FFBUILD_GETTEXT_PREFIX"
+else
+    echo "== building gettext $FFBUILD_BT_INSTALL_gettext into $FFBUILD_GETTEXT_PREFIX =="
+    bt_build_configure "$FFBUILD_BT_URL_gettext" "$FFBUILD_BT_SHA256_gettext" "$FFBUILD_GETTEXT_PREFIX" ||
+        echo "  WARNING: gettext build failed" >&2
+fi
+
 # ----------------------------------------------------------------- python -----
 # 构建只需要一个解释器：这个 venv。它同时提供 meson 与 jsonschema/jinja2。
 # Python 本身不构建——版本不足时给出对应发行版的安装命令。

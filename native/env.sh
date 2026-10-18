@@ -420,8 +420,10 @@ _ffbuild_path_append() {
 FFBUILD_AUTOCONF_PREFIX="${FFBUILD_AUTOCONF_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/autoconf-${FFBUILD_BT_INSTALL_autoconf:-2.73}}"
 FFBUILD_AUTOMAKE_PREFIX="${FFBUILD_AUTOMAKE_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/automake-${FFBUILD_BT_INSTALL_automake:-1.18.1}}"
 FFBUILD_CMAKE_PREFIX="${FFBUILD_CMAKE_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/cmake-${FFBUILD_BT_INSTALL_cmake:-3.28.3}}"
+FFBUILD_GETTEXT_PREFIX="${FFBUILD_GETTEXT_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/gettext-${FFBUILD_BT_INSTALL_gettext:-0.22.5}}"
 FFBUILD_PYTHON_PREFIX="${FFBUILD_PYTHON_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/venv}"
-export FFBUILD_AUTOCONF_PREFIX FFBUILD_AUTOMAKE_PREFIX FFBUILD_CMAKE_PREFIX FFBUILD_PYTHON_PREFIX
+export FFBUILD_AUTOCONF_PREFIX FFBUILD_AUTOMAKE_PREFIX FFBUILD_CMAKE_PREFIX \
+       FFBUILD_GETTEXT_PREFIX FFBUILD_PYTHON_PREFIX
 
 _ac_cur="$(autoconf --version 2>/dev/null | head -n1 | awk '{print $NF}')"
 if [[ -z "$_ac_cur" ]] || ! _ffbuild_ver_ge "$_ac_cur" "${FFBUILD_BT_MIN_autoconf:-2.73}"; then
@@ -431,6 +433,12 @@ fi
 _cm_cur="$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}')"
 if [[ -z "$_cm_cur" ]] || ! _ffbuild_ver_ge "$_cm_cur" "${FFBUILD_BT_MIN_cmake:-3.28}"; then
     _ffbuild_path_prepend "$FFBUILD_CMAKE_PREFIX/bin"
+fi
+
+# autopoint 提供 gettext 的构建基础设施；版本不足会让 zvbi 的 autoreconf 直接失败
+_ap_cur="$(autopoint --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+if [[ -z "$_ap_cur" ]] || ! _ffbuild_ver_ge "$_ap_cur" "${FFBUILD_BT_MIN_gettext:-0.21}"; then
+    _ffbuild_path_prepend "$FFBUILD_GETTEXT_PREFIX/bin"
 fi
 
 # automake 双轨：裸名看下限，版本名（gnulib）永远要 1.18
@@ -444,7 +452,7 @@ fi
 if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/python3" ]]; then
     _ffbuild_path_prepend "$FFBUILD_PYTHON_PREFIX/bin"
 fi
-unset _ac_cur _cm_cur _am_cur
+unset _ac_cur _cm_cur _am_cur _ap_cur
 export PATH
 
 # -------------------------------------------------------------- rust PATH -----
