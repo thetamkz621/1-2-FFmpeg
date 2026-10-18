@@ -7,7 +7,17 @@ ffbuild_enabled() {
     return 0
 }
 
+ffbuild_dockerstage() {
+    to_df "RUN --mount=src=${SELF},dst=/stage.sh --mount=src=${SELFCACHE},dst=/cache.tar.xz --mount=src=patches/soxr,dst=/patches run_stage /stage.sh"
+}
+
 ffbuild_dockerbuild() {
+    for patch in "${FFBUILD_PATCHES:-/patches}"/*.patch; do
+        [[ -e "$patch" ]] || continue
+        echo "Applying $(basename "$patch")"
+        patch -p1 --forward --silent < "$patch"
+    done
+
     sed -i 's/VERSION 3.1 /VERSION 3.1...3.10 /g' CMakeLists.txt
 
     # Short-circuit the check to generate a .pc file. We always want it.
@@ -21,10 +31,6 @@ ffbuild_dockerbuild() {
         ..
     make -j$(nproc)
     make install DESTDIR="$FFBUILD_DESTDIR"
-
-    if [[ $TARGET != winarm64 ]]; then
-        echo "Libs.private: -lgomp" >> "$FFBUILD_DESTPREFIX"/lib/pkgconfig/soxr.pc
-    fi
 }
 
 ffbuild_configure() {
@@ -40,5 +46,9 @@ ffbuild_ldflags() {
 }
 
 ffbuild_libs() {
-    [[ $TARGET != winarm64 ]] && echo -lgomp
+    # The OpenMP runtime is described by soxr.pc's Libs.private, which CMake
+    # fills from the compiler's actual OpenMP implementation (libgomp for gcc,
+    # libomp for clang).  Emitting a hard-coded -lgomp here would impose GCC's
+    # runtime on clang builds and duplicate the .pc entry.
+    return 0
 }
