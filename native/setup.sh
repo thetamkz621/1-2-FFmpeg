@@ -117,7 +117,7 @@ fi
 # ------------------------------------------------------------- check mode -----
 # autoconf / automake / cmake / meson 不在此列：它们可能是 setup 自己构建的托管版本，
 # 由下面的 "build tools" 表按版本下限判定。
-REQUIRED_TOOLS=(gcc g++ make ninja pkg-config git patch tar xz zip nasm yasm libtoolize python3 gen-implib git-mini-clone retry-tool)
+REQUIRED_TOOLS=(gcc g++ make ninja pkg-config git patch svn tar xz zip nasm yasm libtoolize python3 gen-implib git-mini-clone retry-tool)
 OPTIONAL_TOOLS=(clang cargo rustc node 7z xxd gperf bison flex ragel itstool help2man)
 
 do_check() {
@@ -178,6 +178,52 @@ do_check() {
         printf '  %-9s system=%-8s min=%-7s NEEDS INSTALL\n' python "${py_ver:-none}" "$FFBUILD_BT_SYSTEM_python"
     fi
     printf '  managed root: %s\n' "$FFBUILD_BUILDTOOLS_PREFIX"
+    echo
+
+    echo "== runtime prerequisites (not managed; install from your distro) =="
+    rt_ok()      { printf '  [ok]      %s\n' "$1"; }
+    rt_missing() { printf '  [MISSING] %s\n              %s\n' "$1" "$2"; }
+
+    if perl -MTime::Piece -e1 2>/dev/null; then
+        rt_ok "perl(Time::Piece)      openssl"
+    else
+        rt_missing "perl(Time::Piece)      openssl" \
+                   "dnf install 'perl(Time::Piece)'  |  apt-get install perl"
+    fi
+
+    ap_ver="$(probe_version autopoint --version | awk '{print $NF}')"
+    if [[ -n "$ap_ver" ]] && version_ge "$ap_ver" "0.21"; then
+        rt_ok "autopoint >= 0.21      zvbi (found $ap_ver)"
+    else
+        rt_missing "autopoint >= 0.21      zvbi" \
+                   "dnf install gettext-devel  |  apt-get install autopoint"
+    fi
+
+    if command -v ocaml >/dev/null 2>&1 && command -v ocamlbuild >/dev/null 2>&1 &&
+       command -v ocamlfind >/dev/null 2>&1 &&
+       ocamlfind list 2>/dev/null | grep -q '^num '; then
+        rt_ok "OCaml + findlib + num  fftw3"
+    else
+        rt_missing "OCaml + findlib + num  fftw3" \
+                   "dnf install ocaml ocaml-findlib ocaml-ocamlbuild; num from source or opam"
+    fi
+
+    cc_major="$(c++ -dumpversion 2>/dev/null | awk -F. '{print $1}')"
+    if [[ -n "$cc_major" ]] && (( cc_major >= 9 )); then
+        rt_ok "system c++ >= 9        shaderc native_build (found $cc_major)"
+    else
+        rt_missing "system c++ >= 9        shaderc native_build" \
+                   "dnf install gcc-toolset-14 and put its bin before /usr/bin"
+    fi
+
+    ossl_ver="$(openssl version 2>/dev/null | awk '{print $2}')"
+    if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3"; then
+        rt_ok "OpenSSL >= 3           cargo-c (found $ossl_ver)"
+    else
+        rt_missing "OpenSSL >= 3           cargo-c" \
+                   "dnf install openssl3-devel; then OPENSSL_INCLUDE_DIR=/usr/include/openssl3 OPENSSL_LIB_DIR=/usr/lib64/openssl3"
+    fi
+    unset -f rt_ok rt_missing
     echo
 
     echo "== optional tools (only needed by some variants) =="
@@ -524,6 +570,20 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
     source "$CARGO_HOME/env" 2>/dev/null || true
     # cargo-c's build must see *system* pkg-config files (e.g. openssl); the
     # prefix-only PKG_CONFIG_LIBDIR installed by native/env.sh would hide them.
+    #
+    # Its curl-sys dependency bundles a curl that requires OpenSSL >= 3.  EL8
+    # ships 1.1.1; EPEL's openssl3-devel installs a parallel tree, so point
+    # openssl-sys at it instead of failing with "OpenSSL 3.0.0 or greater".
+    if [[ "$(openssl version 2>/dev/null | awk '{print $2}' | cut -d. -f1)" -lt 3 ]]; then
+        if [[ -f /usr/include/openssl3/openssl/ssl.h ]]; then
+            export OPENSSL_INCLUDE_DIR=/usr/include/openssl3
+            export OPENSSL_LIB_DIR=/usr/lib64/openssl3
+            echo "  note: cargo-c will build against OpenSSL 3 (/usr/include/openssl3)"
+        else
+            echo "  WARNING: OpenSSL < 3 and openssl3-devel is missing; cargo-c may fail" >&2
+            echo "           install it (dnf install openssl3-devel) or skip --with-rust" >&2
+        fi
+    fi
     if ! command -v cargo-cinstall >/dev/null 2>&1; then
         (
             unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH
