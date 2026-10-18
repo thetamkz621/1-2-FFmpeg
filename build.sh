@@ -327,6 +327,17 @@ rm -rf "$FFBUILD_ROOT/pkgroot"
 mkdir -p "$PKGROOT"
 
 package_variant "$FFMPEG_PREFIX" "$PKGROOT"
+
+# The variant's sed rewrites the *container* literal /ffbuild/prefix; a native
+# build tree lives at an arbitrary host path, so libdir/includedir would keep it
+# and the .pc files would not be relocatable. Rewrite whatever prefix we
+# actually packaged from, leaving only ${prefix} behind.
+if [[ -d "$PKGROOT/lib/pkgconfig" ]]; then
+    # /^prefix=/! : package_variant already turned that line into
+    # ${pcfiledir}/../..; rewriting it again would make it self-referential.
+    find "$PKGROOT/lib/pkgconfig" -name '*.pc' -print0 |
+        xargs -0 -r sed -i "/^prefix=/!s|$FFMPEG_PREFIX|\${prefix}|g"
+fi
 [[ -n "${LICENSE_FILE:-}" && -f "$FFMPEG_DIR/$LICENSE_FILE" ]] && \
     cp "$FFMPEG_DIR/$LICENSE_FILE" "$PKGROOT/LICENSE.txt"
 
