@@ -315,6 +315,28 @@ export FFBUILD_JOBS="${FFBUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 # race on generated files. Stage scripts pass `-j` explicitly where it is safe,
 # and build.sh uses -j$FFBUILD_JOBS for FFmpeg itself.
 
+# --------------------------------------------------------- build-time git -----
+# Dependency stages write git objects in their throwaway source trees:
+# 50-aom and 50-libaribb24 apply patches with `git am` (creates commits), and
+# 50-avisynth creates a version tag with `git tag -a`. Upstream ran those inside
+# a container whose git config was known: an identity was set in
+# images/base/Dockerfile and nothing was signed. On a real host all of it is the
+# user's business, and any of it can break the stage:
+#   * commit.gpgsign=true with a passphrase-protected key and no agent ->
+#     "fatal: failed to write commit object";
+#   * tag.gpgsign=true -> `git tag -a` invokes the signer; without a terminal it
+#     fails loudly (and still writes an unsigned tag), with one it blocks on the
+#     passphrase prompt;
+#   * no user.email at all -> "unable to auto-detect email address".
+# Pin all three for this process tree only. GIT_CONFIG_* outranks every config
+# file (git >= 2.31), so the host config is neither read nor written; the author
+# of those throwaway objects matches what the container produced.
+export GIT_CONFIG_COUNT=4
+export GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
+export GIT_CONFIG_KEY_1=user.name      GIT_CONFIG_VALUE_1=Builder
+export GIT_CONFIG_KEY_2=user.email     GIT_CONFIG_VALUE_2=builder@localhost
+export GIT_CONFIG_KEY_3=tag.gpgsign    GIT_CONFIG_VALUE_3=false
+
 # ---------------------------------------------------------------- proxy -------
 # Effective proxy, resolved in this order:
 #   1. FFBUILD_PROXY, when the caller sets it explicitly (an explicitly *empty*
@@ -354,6 +376,27 @@ if [[ -n "$FFBUILD_NO_PROXY" ]]; then
     export no_proxy="$FFBUILD_NO_PROXY" NO_PROXY="$FFBUILD_NO_PROXY"
 fi
 export FFBUILD_NO_PROXY
+
+# ------------------------------------------ autotools / python side PREFIX ----
+# Side prefixes are how this project satisfies newer-tool requirements without
+# touching the distro's packages (see native/setup.sh): the build sees them, and
+# other projects on the same host do not.
+#   autoconf /opt/autoconf-2.73/bin  PREPENDED - `autoconf` itself must be >= 2.73
+#   python   /opt/ffbuild-venv/bin   PREPENDED - the build's only python: it
+#            carries meson and every non-stdlib module the build needs, so no
+#            distro python package is ever assumed to be present
+#   automake /opt/automake-1.18/bin  APPENDED  - only the versioned
+#            aclocal-1.18 / automake-1.18 names are wanted, so the distro's plain
+#            `automake` keeps resolving first (see the block below)
+for _d in "${FFBUILD_AUTOCONF_PREFIX:-/opt/autoconf-2.73}/bin" \
+          "${FFBUILD_PYTHON_PREFIX:-/opt/ffbuild-venv}/bin"; do
+    [[ -d "$_d" ]] || continue
+    case ":$PATH:" in
+        *":$_d:"*) ;;
+        *) export PATH="$_d:$PATH" ;;
+    esac
+done
+unset _d
 
 # ------------------------------------------------------- autotools side PREFIX -
 # Exposes versioned names like aclocal-1.18 (needed by gnulib-based projects)
