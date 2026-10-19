@@ -216,9 +216,14 @@ do_check() {
                    "dnf install gcc-toolset-14 and put its bin before /usr/bin"
     fi
 
+    # cargo-c needs OpenSSL 3 *development* files, not the CLI: on EL8 the
+    # system openssl stays at 1.1.1 while openssl3-devel provides a parallel
+    # tree that setup points openssl-sys at.
     ossl_ver="$(openssl version 2>/dev/null | awk '{print $2}')"
     if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3"; then
         rt_ok "OpenSSL >= 3           cargo-c (found $ossl_ver)"
+    elif [[ -f /usr/include/openssl3/openssl/ssl.h ]]; then
+        rt_ok "OpenSSL 3 dev tree     cargo-c (/usr/include/openssl3, system $ossl_ver)"
     else
         rt_missing "OpenSSL >= 3           cargo-c" \
                    "dnf install openssl3-devel; then OPENSSL_INCLUDE_DIR=/usr/include/openssl3 OPENSSL_LIB_DIR=/usr/lib64/openssl3"
