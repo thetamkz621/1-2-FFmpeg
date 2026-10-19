@@ -46,9 +46,13 @@ ffbuild_ldflags() {
 }
 
 ffbuild_libs() {
-    # The OpenMP runtime is described by soxr.pc's Libs.private, which CMake
-    # fills from the compiler's actual OpenMP implementation (libgomp for gcc,
-    # libomp for clang).  Emitting a hard-coded -lgomp here would impose GCC's
-    # runtime on clang builds and duplicate the .pc entry.
+    # FFmpeg probes libsoxr with a bare -lsoxr (no pkg-config), so the OpenMP
+    # runtime has to arrive through --extra-libs as well.  Reuse what CMake
+    # recorded in soxr.pc instead of hard-coding GCC's -lgomp: clang lowers
+    # OpenMP to the kmp ABI and links libomp.
+    local pc="${FFBUILD_PREFIX:-}/lib/pkgconfig/soxr.pc" priv
+    [[ -f "$pc" ]] || return 0
+    priv="$(sed -n 's/^Libs\.private:[[:space:]]*//p' "$pc")"
+    [[ -n "$priv" ]] && echo "$priv"
     return 0
 }
