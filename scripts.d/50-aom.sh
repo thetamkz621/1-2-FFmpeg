@@ -18,7 +18,7 @@ ffbuild_dockerstage() {
 }
 
 ffbuild_dockerbuild() {
-    for patch in /patches/*.patch; do
+    for patch in "${FFBUILD_PATCHES:-/patches}"/*.patch; do
         echo "Applying $patch"
         git am < "$patch"
     done

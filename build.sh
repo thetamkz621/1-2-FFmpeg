@@ -46,6 +46,12 @@ source native/env.sh
 # shellcheck source=util/deps.sh
 source util/deps.sh
 
+# Upstream bind-mounts patches/<name> at /patches for a few stages (aom,
+# libaribb24).  Natively the driver repopulates this repo-local dir per stage and
+# the scripts read it through $FFBUILD_PATCHES, so no
+# root-owned /patches is involved.
+export FFBUILD_PATCHES="$FFBUILD_REPO_ROOT/patches-current"
+
 # --- native shim for upstream's Dockerfile emitter --------------------------
 # Addins (e.g. addins/lto.sh) emit `ENV ...` lines via to_df(). Natively we
 # apply those ENV lines directly to the environment instead of writing a
@@ -177,9 +183,8 @@ run_one_script() {
     local CACHE="$FFBUILD_REPO_ROOT/.cache/downloads/${STAGENAME}.tar.xz"
     [[ -f "$CACHE" ]] || CACHE=""
 
-    # Upstream bind-mounts patches/<name> at /patches for a few stages
-    # (see their ffbuild_dockerstage). Probe that declaration and repopulate the
-    # repo-local dir that /patches symlinks to (native/setup.sh creates it).
+    # Probe the stage's own `--mount=src=...,dst=/patches` declaration and
+    # repopulate the dir $FFBUILD_PATCHES points at.
     local PATCHSRC
     PATCHSRC="$(stage_patch_src "$SCRIPT")"
     rm -rf "$FFBUILD_REPO_ROOT/patches-current"

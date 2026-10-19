@@ -46,7 +46,7 @@ ffbuild_dockerbuild() {
 
     if [[ $TARGET == linux* ]]; then
         myconf+=(
-            --cross-file=/cross.meson
+            --cross-file="$FFBUILD_MESON_CROSS_FILE"
         )
     else
         echo "Unknown target"

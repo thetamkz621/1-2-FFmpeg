@@ -297,8 +297,11 @@ export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
 #            -latomic ahead of this list, so the binary picks it up dynamically
 #            regardless of how it is written here.
 export FFBUILD_EXTRA_LIBS="${FFBUILD_EXTRA_LIBS--lm -lstdc++ -latomic}"
-export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-/toolchain.cmake}"
-export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-/cross.meson}"
+# Both descriptors are generated into the repo (see ffbuild_write_toolchain_files
+# below) so no root-owned copy under / is needed.  Stage scripts reach them
+# through these variables.
+export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-$FFBUILD_REPO_ROOT/toolchain/generated/toolchain.cmake}"
+export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-$FFBUILD_REPO_ROOT/toolchain/generated/cross.meson}"
 
 export PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
 export PKG_CONFIG_LIBDIR="$FFBUILD_PREFIX/lib/pkgconfig:$FFBUILD_PREFIX/share/pkgconfig"
@@ -481,15 +484,14 @@ done
 unset _d
 
 # ------------------------------------------------- toolchain descriptor files --
-# Upstream stage scripts reference /cross.meson (32 meson stages) and
-# /toolchain.cmake (~10 cmake stages) by absolute path — those files were
-# supplied by the Docker image. We generate equivalent files that reflect the
-# *currently resolved* compilers, so compiler overrides are honoured in both
-# meson and cmake stages.
+# Upstream supplied /cross.meson and /toolchain.cmake from the Docker image and
+# referenced them by absolute path. We generate equivalent files inside the repo
+# that reflect the *currently resolved* compilers, so compiler overrides are
+# honoured in both meson and cmake stages.
 #
-# native/setup.sh plants /cross.meson and /toolchain.cmake as symlinks into
-# toolchain/generated/, so this function (which needs no privileges) is enough
-# to keep them in sync.
+# Stage scripts reach them via $FFBUILD_MESON_CROSS_FILE / $FFBUILD_CMAKE_TOOLCHAIN
+# (the hard-coded meson paths were rewritten to use them), so this
+# function needs no privileges and nothing has to be installed under /.
 _ffbuild_meson_array() {
     # Emit a meson array literal from a (possibly multi-word) command.
     local out="[" first=1 w
