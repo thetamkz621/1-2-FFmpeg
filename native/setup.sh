@@ -66,13 +66,13 @@ asroot() { "${SUDO[@]}" "$@"; }
 # that installs it ever runs.
 probe_version() {
     local out=""
-    out="$("$@" 2>/dev/null | head -n1)" || out=""
+    out="$("$@" 2>/dev/null | sed -n '1p')" || out=""
     printf '%s\n' "$out"
 }
 
 # Version comparison used by both --check and the install sections.
 version_ge() {  # $1 >= $2 (version sort)
-    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$2" ]]
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | sed -n '1p')" == "$2" ]]
 }
 
 # --------------------------------------------------------------- packages -----

@@ -405,7 +405,7 @@ if [[ -f "$FFBUILD_REPO_ROOT/native/buildtools.lock" ]]; then
 fi
 
 _ffbuild_ver_ge() {  # $1 >= $2 (version sort)
-    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$2" ]]
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | sed -n '1p')" == "$2" ]]
 }
 _ffbuild_path_prepend() {
     [[ -d "$1" ]] || return 0
@@ -425,24 +425,24 @@ FFBUILD_PYTHON_PREFIX="${FFBUILD_PYTHON_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/venv}
 export FFBUILD_AUTOCONF_PREFIX FFBUILD_AUTOMAKE_PREFIX FFBUILD_CMAKE_PREFIX \
        FFBUILD_GETTEXT_PREFIX FFBUILD_PYTHON_PREFIX
 
-_ac_cur="$(autoconf --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+_ac_cur="$(autoconf --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
 if [[ -z "$_ac_cur" ]] || ! _ffbuild_ver_ge "$_ac_cur" "${FFBUILD_BT_MIN_autoconf:-2.73}"; then
     _ffbuild_path_prepend "$FFBUILD_AUTOCONF_PREFIX/bin"
 fi
 
-_cm_cur="$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}')"
+_cm_cur="$(cmake --version 2>/dev/null | sed -n '1p' | awk '{print $3}')" || true
 if [[ -z "$_cm_cur" ]] || ! _ffbuild_ver_ge "$_cm_cur" "${FFBUILD_BT_MIN_cmake:-3.28}"; then
     _ffbuild_path_prepend "$FFBUILD_CMAKE_PREFIX/bin"
 fi
 
 # autopoint 提供 gettext 的构建基础设施；版本不足会让 zvbi 的 autoreconf 直接失败
-_ap_cur="$(autopoint --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+_ap_cur="$(autopoint --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
 if [[ -z "$_ap_cur" ]] || ! _ffbuild_ver_ge "$_ap_cur" "${FFBUILD_BT_MIN_gettext:-0.21}"; then
     _ffbuild_path_prepend "$FFBUILD_GETTEXT_PREFIX/bin"
 fi
 
 # automake 双轨：裸名看下限，版本名（gnulib）永远要 1.18
-_am_cur="$(automake --version 2>/dev/null | head -n1 | awk '{print $NF}')"
+_am_cur="$(automake --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
 if [[ -n "$_am_cur" ]] && _ffbuild_ver_ge "$_am_cur" "${FFBUILD_BT_MIN_automake:-1.16.3}"; then
     _ffbuild_path_append "$FFBUILD_AUTOMAKE_PREFIX/bin"
 else
