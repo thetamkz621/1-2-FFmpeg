@@ -241,7 +241,7 @@ do_check() {
     done
     echo
     echo "== system paths provisioned by setup =="
-    for f in /cross.meson /toolchain.cmake /patches /opt/glslc /usr/share/aclocal /opt/implib/implib-gen.py; do
+    for f in /opt/glslc /usr/share/aclocal /opt/implib/implib-gen.py; do
         if [[ -e "$f" ]]; then
             printf '  [ok]      %s\n' "$f"
         else
@@ -485,30 +485,13 @@ if [[ "$ONLY_BUILDTOOLS" -eq 1 ]]; then
 fi
 
 # --------------------------------------------------- toolchain descriptor -----
-# Upstream stage scripts reference these by absolute path:
-#   32 meson stages: --cross-file=/cross.meson
-#   ~10 cmake stages: -DCMAKE_TOOLCHAIN_FILE=/toolchain.cmake
-# We can't remove those absolute references without patching stage scripts, so
-# instead we symlink them to generated files inside the repo. build.sh then
-# refreshes those files (no root needed) so they always reflect the resolved
-# compilers and toolchain mode.
-echo "== installing toolchain descriptor files =="
+# The descriptors live inside the repo and are reached through
+# $FFBUILD_MESON_CROSS_FILE / $FFBUILD_CMAKE_TOOLCHAIN, so this only has to
+# create them — no symlink under /, no root.
+echo "== writing toolchain descriptor files =="
 mkdir -p "$FFBUILD_REPO_ROOT/toolchain/generated"
 ffbuild_write_toolchain_files
-
-for name in cross.meson toolchain.cmake; do
-    target="/$name"
-    src="$FFBUILD_REPO_ROOT/toolchain/generated/$name"
-    if asroot ln -sfn "$src" "$target" 2>/dev/null; then
-        echo "  linked $target -> $src"
-    elif [[ -e "$target" ]]; then
-        echo "  note: $target already exists but is not a symlink; refreshing it instead"
-        asroot rm -f "$target" && asroot ln -sfn "$src" "$target" || \
-            echo "  WARNING: could not link $target (need root)" >&2
-    else
-        echo "  WARNING: could not create $target (need root)" >&2
-    fi
-done
+echo "  $FFBUILD_REPO_ROOT/toolchain/generated/{cross.meson,toolchain.cmake}"
 
 # ------------------------------------------------------------ build root ------
 echo "== creating build root =="
@@ -535,15 +518,6 @@ if asroot touch /opt/glslc && asroot chown "$build_uid:$build_gid" /opt/glslc; t
     echo "  /opt/glslc          (writable)"
 else
     echo "  WARNING: /opt/glslc not writable (47-vulkan/50-shaderc may fail)" >&2
-fi
-
-# Upstream bind-mounts patches/<name> at /patches per stage (aom, aribb24).
-# Point /patches at a repo-local dir the driver can repopulate without root.
-mkdir -p "$FFBUILD_REPO_ROOT/patches-current"
-if asroot ln -sfn "$FFBUILD_REPO_ROOT/patches-current" /patches; then
-    echo "  /patches -> $FFBUILD_REPO_ROOT/patches-current"
-else
-    echo "  WARNING: could not create /patches symlink (aom/aribb24 patches unavailable)" >&2
 fi
 
 # 45-x11 / 50-vaapi stages call gen-implib (util/bin/gen-implib), which needs
