@@ -679,7 +679,11 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
     if ! command -v cargo-cinstall >/dev/null 2>&1; then
         (
             unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH
-            cargo install cargo-c
+            # 中间产物不放 TMPDIR（可能是 tmpfs）也不放 ~/.cargo：cargo-c 的构建很吃空间，
+            # TMPDIR 若是 tmpfs 等于把内存当磁盘用。
+            mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/tmp" "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target"
+            TMPDIR="$FFBUILD_BUILDTOOLS_PREFIX/tmp" \
+                cargo install --target-dir "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target" cargo-c
         )
     fi
 else
