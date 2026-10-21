@@ -21,12 +21,20 @@ package_variant() {
     mkdir -p "$OUT"/include
     cp -r "$IN"/include/* "$OUT"/include
 
-    mkdir -p "$OUT"/doc
-    cp -r "$IN"/share/doc/ffmpeg/* "$OUT"/doc
+    # Optional, like the static variant: man pages only exist when texi2html was
+    # present at build time; packing must not fail over their absence.
+    if [[ -d "$IN/share/doc/ffmpeg" ]]; then
+        mkdir -p "$OUT"/doc
+        cp -r "$IN"/share/doc/ffmpeg/. "$OUT"/doc/
+    fi
 
-    mkdir -p "$OUT/man"
-    cp -r "$IN"/share/man/* "$OUT"/man
+    if [[ -d "$IN/share/man" ]]; then
+        mkdir -p "$OUT"/man
+        cp -r "$IN"/share/man/. "$OUT"/man/
+    fi
 
-    mkdir -p "$OUT/presets"
-    cp "$IN"/share/ffmpeg/*.ffpreset "$OUT"/presets
+    if compgen -G "$IN/share/ffmpeg/*.ffpreset" >/dev/null; then
+        mkdir -p "$OUT/presets"
+        cp "$IN"/share/ffmpeg/*.ffpreset "$OUT"/presets
+    fi
 }
