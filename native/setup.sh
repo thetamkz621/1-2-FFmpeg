@@ -259,6 +259,12 @@ do_check() {
         rt_missing "makeinfo (texinfo)     autotools 文档" "$(tool_hint texinfo)"
     fi
 
+    if command -v ant >/dev/null 2>&1 && command -v java >/dev/null 2>&1; then
+        rt_ok "ant + JDK              libbluray (BD-J)"
+    else
+        rt_missing "ant + JDK              libbluray (BD-J)" "$(tool_hint ant)"
+    fi
+
     ap_ver="$(probe_version autopoint --version | awk '{print $NF}')"
     if [[ -n "$ap_ver" ]] && version_ge "$ap_ver" "0.21"; then
         rt_ok "autopoint >= 0.21      zvbi (found $ap_ver)"
