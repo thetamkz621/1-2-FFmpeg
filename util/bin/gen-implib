@@ -21,7 +21,9 @@ fi
 
 IN="$1"
 OUT="$2"
-IMPLIB_DIR="${FFBUILD_IMPLIB_DIR:-/opt/implib}"
+# Implib.so is a build tool, so it lives in the repo's managed-tools tree like
+# the other buildtools; native/setup.sh installs it there.
+IMPLIB_DIR="${FFBUILD_IMPLIB_DIR:-${FFBUILD_REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}/.buildtools/implib}"
 
 if [[ ! -f "$IMPLIB_DIR/implib-gen.py" ]]; then
     echo "gen-implib: $IMPLIB_DIR/implib-gen.py not found (run native/setup.sh)" >&2

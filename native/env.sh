@@ -480,8 +480,11 @@ fi
 # -------------------------------------------------------------- util PATH -----
 # git-mini-clone / retry-tool live in util/bin (extension-less, like upstream's
 # /usr/bin copies) and must be callable by name from stage download scripts.
-# $FFBUILD_ROOT/bin collects binaries that upstream installed into /usr/bin
-# (e.g. glslc — see util/run_stage.sh).
+# $FFBUILD_ROOT/bin is where upstream's image put helper binaries. Stages that
+# would write one into a system directory (currently only glslc) use a full path
+# from the environment instead; 50-shaderc requires FFBUILD_GLSLc and has no
+# fallback, so it must stay exported here.
+export FFBUILD_GLSLc="$FFBUILD_ROOT/bin/glslc"
 for _d in "$FFBUILD_ROOT/bin" "$FFBUILD_REPO_ROOT/util/bin" "$FFBUILD_REPO_ROOT/util"; do
     case ":$PATH:" in
         *":$_d:"*) ;;

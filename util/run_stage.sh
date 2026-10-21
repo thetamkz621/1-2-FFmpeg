@@ -123,13 +123,6 @@ if [[ -d "${FFBUILD_DESTDIR:-}" ]]; then
     fi
 fi
 
-# Upstream's 47-vulkan/99-enable stage copies /opt/glslc into /usr/bin/glslc via
-# a Docker layer. Natively we surface it on $PATH instead (see native/env.sh).
-if [[ -s /opt/glslc ]]; then
-    mkdir -p "$FFBUILD_ROOT/bin"
-    ln -sf /opt/glslc "$FFBUILD_ROOT/bin/glslc"
-fi
-
 if [[ -n "${STAGENAME:-}" && -n "${FFBUILD_STAGE_ROOT:-}" ]]; then
     rm -rf "$FFBUILD_STAGE_ROOT/$STAGENAME"
 fi

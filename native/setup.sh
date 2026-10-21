@@ -247,14 +247,16 @@ do_check() {
         fi
     done
     echo
-    echo "== system paths provisioned by setup =="
-    for f in /opt/glslc /usr/share/aclocal /opt/implib/implib-gen.py; do
-        if [[ -e "$f" ]]; then
-            printf '  [ok]      %s\n' "$f"
-        else
-            printf '  [MISSING] %s\n' "$f"
-        fi
-    done
+    echo "== repo-local build tools =="
+    # setup provisions nothing outside the repo any more, so the only tree to
+    # report on is the managed-tools one. (glslc is produced by the vulkan stage
+    # into $FFBUILD_GLSLc, not installed by setup.)
+    local implib_gen="${FFBUILD_IMPLIB_DIR:-$FFBUILD_BUILDTOOLS_PREFIX/implib}/implib-gen.py"
+    if [[ -f "$implib_gen" ]]; then
+        printf '  [ok]      %s\n' "$implib_gen"
+    else
+        printf '  [MISSING] %s\n' "$implib_gen"
+    fi
     echo
     ffbuild_env_dump
     if ((${#missing[@]})); then
@@ -488,8 +490,38 @@ else
     fi
 fi
 
+# ------------------------------------------------------ build-time tools ------
+# Nothing below touches the system. The Docker image relied on root-owned system
+# locations for all three of these (the aclocal dir, shaderc's output, Implib.so);
+# the native driver keeps every build-time tool inside the repo instead, so a
+# build needs no root at all — only installing distro packages does.
+echo "== installing build-time tools =="
+
+# 45-x11 / 50-vaapi stages call gen-implib (util/bin/gen-implib), which needs
+# yugr/Implib.so. It is a build tool like autoconf or cmake, so it lives in
+# .buildtools — no root, nothing outside the repo.
+IMPLIB_DIR="${FFBUILD_IMPLIB_DIR:-$FFBUILD_REPO_ROOT/.buildtools/implib}"
+if [[ -f "$IMPLIB_DIR/implib-gen.py" ]]; then
+    echo "  Implib.so           (already present at $IMPLIB_DIR)"
+else
+    echo "== installing Implib.so =="
+    mkdir -p "$(dirname "$IMPLIB_DIR")"
+    implib_tmp="$(mktemp -d)"
+    if git clone --filter=blob:none --depth=1 https://github.com/yugr/Implib.so "$implib_tmp/Implib.so"; then
+        rm -rf "$IMPLIB_DIR"
+        if mv "$implib_tmp/Implib.so" "$IMPLIB_DIR"; then
+            echo "  Implib.so           (installed at $IMPLIB_DIR)"
+        else
+            echo "  WARNING: could not place Implib.so at $IMPLIB_DIR" >&2
+        fi
+    else
+        echo "  WARNING: could not clone Implib.so (gen-implib will fail)" >&2
+    fi
+    rm -rf "$implib_tmp"
+fi
+
 if [[ "$ONLY_BUILDTOOLS" -eq 1 ]]; then
-    echo "note: --buildtools-only set; skipping system paths and build root"
+    echo "note: --buildtools-only set; skipping toolchain descriptors and build root"
     exit 0
 fi
 
@@ -506,51 +538,6 @@ echo "  $FFBUILD_REPO_ROOT/toolchain/generated/{cross.meson,toolchain.cmake}"
 echo "== creating build root =="
 mkdir -p "$FFBUILD_ROOT"/{prefix,destdir,work,log} "$FFBUILD_ROOT/prefix/lib/pkgconfig" "$FFBUILD_ROOT/prefix/include" "$FFBUILD_ROOT/prefix/bin"
 echo "  $FFBUILD_ROOT"
-
-# --------------------------------------------- writable system paths ----------
-# The Docker image ran as root, so a handful of stage scripts write to system
-# locations directly. We cannot hand the build user root, so we pre-create
-# exactly those paths owned by the build user. Each one also has an in-repo
-# alternative that keeps scripts.d unmodified.
-echo "== provisioning writable system paths =="
-build_uid="$(id -u)"; build_gid="$(id -g)"
-
-# 45-x11/10-xtrans.sh copies xorg macros there; also covered by $ACLOCAL_PATH.
-if asroot mkdir -p /usr/share/aclocal && asroot chown "$build_uid:$build_gid" /usr/share/aclocal; then
-    echo "  /usr/share/aclocal  (writable)"
-else
-    echo "  WARNING: /usr/share/aclocal not writable (45-x11/10-xtrans may fail)" >&2
-fi
-
-# 47-vulkan/50-shaderc.sh copies the glslc binary there.
-if asroot touch /opt/glslc && asroot chown "$build_uid:$build_gid" /opt/glslc; then
-    echo "  /opt/glslc          (writable)"
-else
-    echo "  WARNING: /opt/glslc not writable (47-vulkan/50-shaderc may fail)" >&2
-fi
-
-# 45-x11 / 50-vaapi stages call gen-implib (util/bin/gen-implib), which needs
-# yugr/Implib.so — the Docker image installed it at /opt/implib.
-# Clone as the current user (so the proxy environment is available) and only
-# use root for the final placement.
-IMPLIB_DIR="${FFBUILD_IMPLIB_DIR:-/opt/implib}"
-if [[ -f "$IMPLIB_DIR/implib-gen.py" ]]; then
-    echo "  Implib.so           (already present at $IMPLIB_DIR)"
-else
-    echo "== installing Implib.so =="
-    implib_tmp="$(mktemp -d)"
-    if git clone --filter=blob:none --depth=1 https://github.com/yugr/Implib.so "$implib_tmp/Implib.so"; then
-        asroot rm -rf "$IMPLIB_DIR"
-        if asroot mv "$implib_tmp/Implib.so" "$IMPLIB_DIR"; then
-            echo "  Implib.so           (installed at $IMPLIB_DIR)"
-        else
-            echo "  WARNING: could not place Implib.so at $IMPLIB_DIR" >&2
-        fi
-    else
-        echo "  WARNING: could not clone Implib.so (gen-implib will fail)" >&2
-    fi
-    rm -rf "$implib_tmp"
-fi
 
 # The upstream base image sets a git identity; `git am` in the aom/aribb24
 # stages needs one.
@@ -619,6 +606,10 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
         ./configure --prefix="$FFBUILD_CTNG_ROOT" --enable-local
         make -j"$FFBUILD_JOBS"
         cp "$FFBUILD_REPO_ROOT/toolchain/ctng/ct-ng-config" .config
+        # crosstool-ng installs the finished toolchain in CT_PREFIX_DIR, and it
+        # rm -rf's that directory first (CT_RM_RF_PREFIX_DIR=y). Point it at the
+        # root this driver expects instead of the container's /opt.
+        sed -i "s|^CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$FFBUILD_CTNG_ROOT\"|" .config
         ./ct-ng build
     )
     echo "ct-ng toolchain installed under $FFBUILD_CTNG_ROOT"

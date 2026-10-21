@@ -7,14 +7,17 @@ ffbuild_enabled() {
     return 0
 }
 
+# LOCAL DEVIATION from upstream FFmpeg-Builds:
+#   upstream also emits a `COPY --link ... /opt/glslc /usr/bin/glslc` line in
+#   both hooks below, i.e. it installs the host-side glslc binary into the
+#   image. Natively 50-shaderc writes glslc to $FFBUILD_GLSLc and that
+#   directory is already on PATH, so there is nothing to copy.
 ffbuild_dockerlayer() {
     to_df "COPY --link --from=${SELFLAYER} \$FFBUILD_DESTPREFIX/. \$FFBUILD_PREFIX"
-    to_df "COPY --link --from=${SELFLAYER} /opt/glslc /usr/bin/glslc"
 }
 
 ffbuild_dockerfinal() {
     to_df "COPY --link --from=${PREVLAYER} \$FFBUILD_PREFIX/. \$FFBUILD_PREFIX"
-    to_df "COPY --link --from=${SELFLAYER} /opt/glslc /usr/bin/glslc"
 }
 
 ffbuild_dockerdl() {
