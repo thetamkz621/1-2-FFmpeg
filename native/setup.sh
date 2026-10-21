@@ -455,6 +455,7 @@ bt_build_configure() {  # <url> <sha256> <prefix> [cflags]
     if bt_clean_env bash -c 'cd "$1" && CFLAGS="$4" ./configure --prefix="$2" && make -j"$3" && make install' \
            _ "$tmp/src" "$3" "$BT_JOBS" "${4:-}" >"$log" 2>&1; then
         rm -rf "$tmp"
+        echo "  ok: $(basename "$3")"
         return 0
     fi
     bt_build_failed "$log" "$tmp/src"
@@ -468,6 +469,7 @@ bt_build_cmake() {  # <url> <sha256> <prefix> [extra C++ flags]
     if bt_clean_env bash -c 'cd "$1" && CXXFLAGS="$4" ./bootstrap --prefix="$2" --parallel="$3" && make -j"$3" && make install' \
            _ "$tmp/src" "$3" "$BT_JOBS" "${4:-}" >"$log" 2>&1; then
         rm -rf "$tmp"
+        echo "  ok: $(basename "$3")"
         return 0
     fi
     bt_build_failed "$log" "$tmp/src"
@@ -541,7 +543,7 @@ fi
 nasm_cur="$(probe_version nasm --version | awk '{print $3}')"
 nasm_man="$(probe_version "$FFBUILD_NASM_PREFIX/bin/nasm" --version | awk '{print $3}')"
 if [[ -n "$nasm_cur" ]] && version_ge "$nasm_cur" "$FFBUILD_BT_MIN_nasm"; then
-    echo "note: system nasm $nasm_cur >= $FFBUILD_BT_MIN_nasm"
+    echo "note: nasm $nasm_cur >= $FFBUILD_BT_MIN_nasm (already in PATH)"
 elif [[ -n "$nasm_man" ]] && version_ge "$nasm_man" "$FFBUILD_BT_MIN_nasm"; then
     echo "note: managed nasm $nasm_man ready at $FFBUILD_NASM_PREFIX"
 else
@@ -556,7 +558,7 @@ fi
 yasm_cur="$(probe_version yasm --version | awk '{print $2}')"
 yasm_man="$(probe_version "$FFBUILD_YASM_PREFIX/bin/yasm" --version | awk '{print $2}')"
 if [[ -n "$yasm_cur" ]] && version_ge "$yasm_cur" "$FFBUILD_BT_MIN_yasm"; then
-    echo "note: system yasm $yasm_cur >= $FFBUILD_BT_MIN_yasm"
+    echo "note: yasm $yasm_cur >= $FFBUILD_BT_MIN_yasm (already in PATH)"
 elif [[ -n "$yasm_man" ]] && version_ge "$yasm_man" "$FFBUILD_BT_MIN_yasm"; then
     echo "note: managed yasm $yasm_man ready at $FFBUILD_YASM_PREFIX"
 else
