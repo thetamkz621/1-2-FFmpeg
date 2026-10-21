@@ -7,22 +7,44 @@ after installation, which is only correct when the objects were compiled by
 GCC (GOMP ABI).  Clang lowers OpenMP to the kmp ABI and needs libomp, so a
 clang-built libsoxr fails to link with -lgomp.
 
-Let CMake decide: FindOpenMP records the runtime names it used in
-OpenMP_C_LIB_NAMES; put them into the template and drop the hard-coded value.
-When OpenMP was not found the entry stays empty, matching the serial objects.
+Let CMake decide: FindOpenMP records the runtime it used in OpenMP_C_LIB_NAMES
+and where it found it in OpenMP_C_LIBRARIES; put both into the template and
+drop the hard-coded value.  The names alone are not enough: FindOpenMP decides
+"found" by compiling and linking through the compiler *driver* with
+-fopenmp, and the driver appends its own -L.  A distribution can therefore
+report OpenMP found while a bare -lomp does not resolve (Debian keeps
+libomp.so in /usr/lib/llvm-19/lib, outside the linker's default search path),
+so emit the -L entries too, ahead of the -l ones.  The .pc is only consumed on
+the build host, and it is not part of the packaged artifact.
+
+When OpenMP was not found both parts stay empty, matching the serial objects.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index ee48f6c..70d09f4 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -109,6 +109,16 @@ if (WITH_OPENMP)
+@@ -109,6 +109,30 @@ if (WITH_OPENMP)
    if (OPENMP_FOUND)
      set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
      set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 +    # pkg-config consumers of a *static* libsoxr must be told which OpenMP
-+    # runtime the objects were compiled against.  Do not hard-code -lgomp:
-+    # clang lowers OpenMP to the kmp ABI, whose runtime is libomp.
++    # runtime the objects were compiled against, and where that runtime lives.
++    # Do not hard-code -lgomp: clang lowers OpenMP to the kmp ABI, whose
++    # runtime is libomp, and some distributions keep libomp.so outside the
++    # linker's default search path, so the name alone is not enough.
 +    if (OpenMP_C_FOUND)
++      foreach (_soxr_omp_lib ${OpenMP_C_LIBRARIES})
++        if (IS_ABSOLUTE "${_soxr_omp_lib}")
++          get_filename_component (_soxr_omp_dir "${_soxr_omp_lib}" DIRECTORY)
++          list (APPEND _soxr_omp_dirs "${_soxr_omp_dir}")
++        endif()
++      endforeach()
++      if (_soxr_omp_dirs)
++        list (REMOVE_DUPLICATES _soxr_omp_dirs)
++        foreach (_soxr_omp_dir ${_soxr_omp_dirs})
++          string (APPEND SOXR_PC_PRIVATE " -L${_soxr_omp_dir}")
++        endforeach()
++      endif()
 +      foreach (_soxr_omp ${OpenMP_C_LIB_NAMES})
 +        if (NOT _soxr_omp STREQUAL "pthread")
 +          string (APPEND SOXR_PC_PRIVATE " -l${_soxr_omp}")
