@@ -60,6 +60,57 @@ fi
 
 asroot() { "${SUDO[@]}" "$@"; }
 
+# ------------------------------------------------------------- pkg manager ----
+# 只在这一步决定“能不能代装”和“给用户哪条命令”。包名与仓库在不同发行版之间差异太大
+# （EL8 的 nasm 在 CRB、有的发行版根本没有 OCaml 的 num 包），逐发行版硬编码不划算。
+PKG_MGR=""
+for _pm in apt-get dnf pacman zypper; do
+    if command -v "$_pm" >/dev/null 2>&1; then PKG_MGR="$_pm"; break; fi
+done
+unset _pm
+
+# install_hint <apt> <dnf> <pacman> [zypper] -> 一行可直接粘贴的命令
+install_hint() {
+    case "${PKG_MGR:-none}" in
+        apt-get) echo "apt-get install $1" ;;
+        dnf)     echo "dnf install $2" ;;
+        pacman)  echo "pacman -S $3" ;;
+        zypper)  echo "zypper install ${4:-$2}" ;;
+        *)       echo "apt: $1 | dnf: $2 | pacman: $3" ;;
+    esac
+}
+
+# tool_hint <tool> -> 单个缺失工具的安装命令
+tool_hint() {
+    case "$1" in
+        gcc|g++|make|patch|libtoolize)
+            install_hint "build-essential" "gcc gcc-c++ make patch libtool" "base-devel" ;;
+        ninja)      install_hint ninja-build ninja-build ninja ;;
+        pkg-config) install_hint pkg-config pkgconf-pkg-config pkgconf ;;
+        svn)        install_hint subversion subversion subversion ;;
+        nasm)       install_hint nasm nasm nasm ;;
+        zip)        install_hint zip zip zip ;;
+        tar)        install_hint tar tar tar ;;
+        xz)         install_hint xz-utils xz xz ;;
+        git)        install_hint git git git ;;
+        yasm)       install_hint yasm yasm yasm ;;
+        cmake)      install_hint cmake cmake cmake ;;
+        python3)    install_hint "python3 python3-venv" "python3.12 python3.12-devel" python ;;
+        texinfo|makeinfo) install_hint texinfo texinfo texinfo ;;
+        unzip)      install_hint unzip unzip unzip ;;
+        ant)        install_hint "ant default-jdk-headless" "ant java-17-openjdk-headless" "ant jdk-openjdk" ;;
+        ocaml)      install_hint "ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev" \
+                                 "ocaml ocaml-findlib ocaml-ocamlbuild" \
+                                 "ocaml ocaml-findlib ocamlbuild" ;;
+        *)          echo "install it with your package manager (README §2.1)" ;;
+    esac
+}
+
+# Managed-build failures are collected here so the run can end with a real status
+# instead of "setup complete" while required tools are missing.
+SETUP_FAILURES=()
+note_failure() { SETUP_FAILURES+=("$1"); }
+
 # Version probe that is safe under `set -e`: a tool this script is about to
 # install is by definition absent on a fresh host, and a bare
 # `$(missing --version)` would abort setup with status 127 before the code
@@ -130,7 +181,7 @@ do_check() {
         if command -v "$t" >/dev/null 2>&1; then
             printf '  [ok]      %-14s %s\n' "$t" "$(command -v "$t")"
         else
-            printf '  [MISSING] %-14s\n' "$t"
+            printf '  [MISSING] %-14s %s\n' "$t" "$(tool_hint "$t")"
         fi
     done
     echo "== build tools (policy: install only when the system is older) =="
@@ -171,6 +222,10 @@ do_check() {
     printf '  %-9s system=%-8s min=%-7s managed=%-8s %s\n' \
         automake "${am_cur:-none}" "$FFBUILD_BT_MIN_automake" "${am_man:-none}" "$am_verdict"
     btv cmake    "$cm_cur" "$FFBUILD_BT_MIN_cmake"    "$cm_man"
+    if [[ -z "$cm_man" ]] && { [[ -z "$cm_cur" ]] || ! version_ge "$cm_cur" "$FFBUILD_BT_MIN_cmake"; }; then
+        printf '              -> %s  (or re-run ./native/setup.sh to build %s into .buildtools)\n' \
+            "$(tool_hint cmake)" "$FFBUILD_BT_INSTALL_cmake"
+    fi
     local py_bin py_ver
     py_bin=""
     for _c in python3.13 python3.12 python3.11 python3.10 python3; do
@@ -196,6 +251,12 @@ do_check() {
     else
         rt_missing "perl(Time::Piece)      openssl" \
                    "dnf install 'perl(Time::Piece)'  |  apt-get install perl"
+    fi
+
+    if command -v makeinfo >/dev/null 2>&1; then
+        rt_ok "makeinfo (texinfo)     gmp 等 autotools 文档"
+    else
+        rt_missing "makeinfo (texinfo)     autotools 文档" "$(tool_hint texinfo)"
     fi
 
     ap_ver="$(probe_version autopoint --version | awk '{print $NF}')"
@@ -268,7 +329,10 @@ do_check() {
     if ((${#missing[@]})); then
         echo
         echo "Missing required tools: ${missing[*]}"
-        echo "Run: ./native/setup.sh"
+        echo "  distro packages: install them as shown above (README §2.1), then re-run this check."
+        echo "  managed tools  : if cmake / nasm / yasm / OCaml are the gaps, './native/setup.sh'"
+        echo "                   builds them — failures are explained inline, logs in"
+        echo "                   $FFBUILD_BUILDTOOLS_PREFIX/log/."
         return 1
     fi
 }
@@ -278,20 +342,28 @@ if [[ "$DO_CHECK" -eq 1 ]]; then
     exit $?
 fi
 
-# ----------------------------------------------------------- apt install -----
-echo "== installing build prerequisites (apt) =="
-# --no-apt is for hosts whose packages are managed outside this script (shared
-# machines, non-Debian distros); the rest of setup still runs.
-# apt may be unusable for reasons unrelated to this project (e.g. a malformed
-# sources file). That must not be fatal: the tools may already be installed.
+# ------------------------------------------------------- package install -----
+# 只代装 apt 能装的东西。其他发行版不猜包名、也不去碰 sudo，直接把命令打给用户 ——
+# 猜错的代价（装错包、改坏仓库、在无 tty 时抛 sudo 错误）比省下的几步大得多。
+# --no-apt 供“包由外部管理”的宿主使用；其余步骤照常进行。
 APT_OK=1
 if [[ "$NO_APT" -eq 1 ]]; then
     APT_OK=0
     echo "note: --no-apt: skipping package installation (tools must already be present)"
-elif ! asroot apt-get update; then
+elif [[ "$PKG_MGR" != "apt-get" ]]; then
     APT_OK=0
-    echo "WARNING: 'apt-get update' failed; skipping apt-based installation." >&2
-    echo "         Run './native/setup.sh --check' to see what is already present." >&2
+    echo "note: no apt here (detected: ${PKG_MGR:-none}) — install distro packages yourself, then re-run --check"
+    echo "      $(install_hint \
+        "build-essential pkg-config m4 perl python3 nasm yasm cmake ninja-build texinfo ant default-jdk-headless" \
+        "powertools: nasm yasm ninja-build gperf help2man; gcc gcc-c++ make patch m4 perl python3.12 cmake texinfo ant java-17-openjdk-headless" \
+        "base-devel pkgconf m4 perl python nasm yasm cmake ninja texinfo ant jdk-openjdk")"
+else
+    echo "== installing build prerequisites (apt) =="
+    if ! asroot apt-get update; then
+        APT_OK=0
+        echo "WARNING: 'apt-get update' failed; skipping apt-based installation." >&2
+        echo "         Run './native/setup.sh --check' to see what is already present." >&2
+    fi
 fi
 
 if [[ "$APT_OK" -eq 1 ]]; then
@@ -313,8 +385,6 @@ if [[ "$APT_OK" -eq 1 ]]; then
     if ((${#SKIPPED[@]})); then
         echo "note: not available in this distro, skipped: ${SKIPPED[*]}"
     fi
-else
-    echo "note: apt not usable on this host — skipping package installation"
 fi
 
 # ------------------------------------------------------------ build tools -----
@@ -364,27 +434,43 @@ bt_clean_env() {  # runs a command without the build's compiler/flag overrides
     )
 }
 
-bt_build_configure() {  # <url> <sha256> <prefix>
-    local tmp
+# 托管构建的输出不再丢进 /dev/null：失败时用户至少能看到最后一屏错误，
+# 完整日志留在 .buildtools/log/ 里（重启后仍在，便于事后排查）。
+bt_logfile() {  # <prefix> -> <prefix 的 basename>.log
+    mkdir -p "$BT_PREFIX/log"
+    printf '%s/log/%s.log' "$BT_PREFIX" "$(basename "$1")"
+}
+
+bt_build_failed() {  # <logfile> <src-dir>
+    echo "  WARNING: build failed" >&2
+    echo "    log:  $1" >&2
+    tail -n 4 "$1" 2>/dev/null | sed 's/^/    | /' >&2
+    echo "    src:  $2 (left for inspection)" >&2
+}
+
+bt_build_configure() {  # <url> <sha256> <prefix> [cflags]
+    local tmp log
     tmp="$(bt_unpack "$1" "$2")" || return 1
-    if bt_clean_env bash -c 'cd "$1" && ./configure --prefix="$2" && make -j"$3" && make install' \
-           _ "$tmp/src" "$3" "$BT_JOBS" >/dev/null 2>&1; then
+    log="$(bt_logfile "$3")"
+    if bt_clean_env bash -c 'cd "$1" && CFLAGS="$4" ./configure --prefix="$2" && make -j"$3" && make install' \
+           _ "$tmp/src" "$3" "$BT_JOBS" "${4:-}" >"$log" 2>&1; then
         rm -rf "$tmp"
         return 0
     fi
-    echo "  WARNING: build failed; source tree left at $tmp/src" >&2
+    bt_build_failed "$log" "$tmp/src"
     return 1
 }
 
-bt_build_cmake() {  # <url> <sha256> <prefix>
-    local tmp
+bt_build_cmake() {  # <url> <sha256> <prefix> [extra C++ flags]
+    local tmp log
     tmp="$(bt_unpack "$1" "$2")" || return 1
-    if bt_clean_env bash -c 'cd "$1" && ./bootstrap --prefix="$2" --parallel="$3" && make -j"$3" && make install' \
-           _ "$tmp/src" "$3" "$BT_JOBS" >/dev/null 2>&1; then
+    log="$(bt_logfile "$3")"
+    if bt_clean_env bash -c 'cd "$1" && CXXFLAGS="$4" ./bootstrap --prefix="$2" --parallel="$3" && make -j"$3" && make install' \
+           _ "$tmp/src" "$3" "$BT_JOBS" "${4:-}" >"$log" 2>&1; then
         rm -rf "$tmp"
         return 0
     fi
-    echo "  WARNING: build failed; source tree left at $tmp/src" >&2
+    bt_build_failed "$log" "$tmp/src"
     return 1
 }
 
@@ -398,7 +484,7 @@ elif [[ -n "$ac_man" ]] && version_ge "$ac_man" "$FFBUILD_BT_MIN_autoconf"; then
 else
     echo "== building autoconf $FFBUILD_BT_INSTALL_autoconf into $FFBUILD_AUTOCONF_PREFIX =="
     bt_build_configure "$FFBUILD_BT_URL_autoconf" "$FFBUILD_BT_SHA256_autoconf" "$FFBUILD_AUTOCONF_PREFIX" ||
-        echo "  WARNING: autoconf build failed" >&2
+        note_failure autoconf
 fi
 
 # --------------------------------------------------------------- automake -----
@@ -417,7 +503,7 @@ else
     echo "== building automake $FFBUILD_BT_INSTALL_automake into $FFBUILD_AUTOMAKE_PREFIX =="
     echo "   (system automake is ${am_cur:-absent} and provides no automake-$am_major)"
     bt_build_configure "$FFBUILD_BT_URL_automake" "$FFBUILD_BT_SHA256_automake" "$FFBUILD_AUTOMAKE_PREFIX" ||
-        echo "  WARNING: automake build failed" >&2
+        note_failure automake
 fi
 
 # ------------------------------------------------------------------ cmake -----
@@ -430,7 +516,7 @@ elif [[ -n "$cm_man" ]] && version_ge "$cm_man" "$FFBUILD_BT_MIN_cmake"; then
 else
     echo "== building cmake $FFBUILD_BT_INSTALL_cmake into $FFBUILD_CMAKE_PREFIX (takes a while) =="
     bt_build_cmake "$FFBUILD_BT_URL_cmake" "$FFBUILD_BT_SHA256_cmake" "$FFBUILD_CMAKE_PREFIX" ||
-        echo "  WARNING: cmake build failed" >&2
+        note_failure cmake
 fi
 
 # ----------------------------------------------------------------- gettext -----
@@ -445,7 +531,7 @@ elif [[ -n "$ap_man" ]] && version_ge "$ap_man" "$FFBUILD_BT_MIN_gettext"; then
 else
     echo "== building gettext $FFBUILD_BT_INSTALL_gettext into $FFBUILD_GETTEXT_PREFIX =="
     bt_build_configure "$FFBUILD_BT_URL_gettext" "$FFBUILD_BT_SHA256_gettext" "$FFBUILD_GETTEXT_PREFIX" ||
-        echo "  WARNING: gettext build failed" >&2
+        note_failure gettext
 fi
 
 # ------------------------------------------------------------------- nasm -----
@@ -461,7 +547,7 @@ elif [[ -n "$nasm_man" ]] && version_ge "$nasm_man" "$FFBUILD_BT_MIN_nasm"; then
 else
     echo "== building nasm $FFBUILD_BT_INSTALL_nasm into $FFBUILD_NASM_PREFIX =="
     bt_build_configure "$FFBUILD_BT_URL_nasm" "$FFBUILD_BT_SHA256_nasm" "$FFBUILD_NASM_PREFIX" ||
-        echo "  WARNING: nasm build failed" >&2
+        note_failure nasm
 fi
 
 # ------------------------------------------------------------------- yasm -----
@@ -475,8 +561,8 @@ elif [[ -n "$yasm_man" ]] && version_ge "$yasm_man" "$FFBUILD_BT_MIN_yasm"; then
     echo "note: managed yasm $yasm_man ready at $FFBUILD_YASM_PREFIX"
 else
     echo "== building yasm $FFBUILD_BT_INSTALL_yasm into $FFBUILD_YASM_PREFIX =="
-    bt_build_configure "$FFBUILD_BT_URL_yasm" "$FFBUILD_BT_SHA256_yasm" "$FFBUILD_YASM_PREFIX" ||
-        echo "  WARNING: yasm build failed" >&2
+    bt_build_configure "$FFBUILD_BT_URL_yasm" "$FFBUILD_BT_SHA256_yasm" "$FFBUILD_YASM_PREFIX" "-std=gnu11" ||
+        note_failure yasm
 fi
 
 # ------------------------------------------------------------------ ocaml -----
@@ -513,30 +599,51 @@ else
     opam_log="$FFBUILD_OPAM_ROOT/opam-install.log"
     if [[ -x "$opam_bin" ]]; then
         export OPAMROOT
-        if [[ ! -d "$OPAMROOT" ]]; then
-            "$opam_bin" init --bare --disable-sandboxing -y >"$opam_log" 2>&1 ||
-                echo "  WARNING: opam init failed (see $opam_log)" >&2
+        # opam 自己也要几样东西：unzip 解仓库索引，git（或 hg/darcs/rsync）与
+        # curl/wget 至少各一个。缺了就直说缺什么——不要先让 init 失败一次，
+        # 再让人去翻 opam-install.log。
+        opam_missing=()
+        command -v unzip >/dev/null 2>&1 || opam_missing+=(unzip)
+        command -v git >/dev/null 2>&1 || opam_missing+=(git)
+        if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+            opam_missing+=(curl)
         fi
-        if ! "$opam_bin" switch list --short 2>/dev/null | grep -qx default; then
-            # Prefer the system compiler (fast); fall back to building one when
-            # the distro has no OCaml at all or opam rejects its version.
-            if ! "$opam_bin" switch create default ocaml-system -y >>"$opam_log" 2>&1; then
-                "$opam_bin" switch create default --packages="$FFBUILD_BT_OCAML_COMPILER" -y >>"$opam_log" 2>&1 ||
-                    echo "  WARNING: could not create an opam switch (see $opam_log)" >&2
-            fi
-        fi
-        # ocamlbuild's build aborts when a distro copy is present ("Preinstalled
-        # ocamlbuild detected at /usr/lib/ocaml/ocamlbuild"). The guard is a make
-        # variable, so it can be disabled through the environment.
-        if ! CHECK_IF_PREINSTALLED=false "$opam_bin" install -y --switch=default \
-                ocamlfind ocamlbuild num >>"$opam_log" 2>&1; then
-            echo "  WARNING: opam could not install ocamlfind/ocamlbuild/num (see $opam_log)" >&2
-        fi
-        if [[ -x "$OPAMROOT/default/bin/ocamlfind" && -f "$OPAMROOT/default/lib/num/META" ]]; then
-            echo "  OCaml + ocamlfind + num ready under $OPAMROOT"
-            echo "  (1-2 min with a system compiler, 10-20 min when opam builds one)"
+        if ((${#opam_missing[@]})); then
+            echo "  WARNING: opam needs ${opam_missing[*]}; skipping the OCaml fallback" >&2
+            for _m in "${opam_missing[@]}"; do echo "           $(tool_hint "$_m")" >&2; done
+            unset _m
+            note_failure "ocaml (opam prerequisites missing: ${opam_missing[*]})"
         else
-            echo "  ERROR: OCaml is still unusable; install it from your distro (README §2.1)" >&2
+            if [[ ! -d "$OPAMROOT" ]] &&
+               ! "$opam_bin" init --bare --disable-sandboxing -y >"$opam_log" 2>&1; then
+                echo "  WARNING: opam init failed (see $opam_log)" >&2
+                note_failure "ocaml (opam init failed)"
+            fi
+            if ! "$opam_bin" switch list --short 2>/dev/null | grep -qx default; then
+                # Prefer the system compiler (fast); fall back to building one when
+                # the distro has no OCaml at all or opam rejects its version.
+                if ! "$opam_bin" switch create default ocaml-system -y >>"$opam_log" 2>&1; then
+                    "$opam_bin" switch create default --packages="$FFBUILD_BT_OCAML_COMPILER" -y >>"$opam_log" 2>&1 || {
+                        echo "  WARNING: could not create an opam switch (see $opam_log)" >&2
+                        note_failure "ocaml (opam switch)"
+                    }
+                fi
+            fi
+            # ocamlbuild's build aborts when a distro copy is present ("Preinstalled
+            # ocamlbuild detected at /usr/lib/ocaml/ocamlbuild"). The guard is a make
+            # variable, so it can be disabled through the environment.
+            if ! CHECK_IF_PREINSTALLED=false "$opam_bin" install -y --switch=default \
+                    ocamlfind ocamlbuild num >>"$opam_log" 2>&1; then
+                echo "  WARNING: opam could not install ocamlfind/ocamlbuild/num (see $opam_log)" >&2
+                note_failure "ocaml (opam install)"
+            fi
+            if [[ -x "$OPAMROOT/default/bin/ocamlfind" && -f "$OPAMROOT/default/lib/num/META" ]]; then
+                echo "  OCaml + ocamlfind + num ready under $OPAMROOT"
+                echo "  (1-2 min with a system compiler, 10-20 min when opam builds one)"
+            else
+                echo "  ERROR: OCaml is still unusable — $(tool_hint ocaml)" >&2
+                note_failure "ocaml"
+            fi
         fi
     fi
 fi
@@ -720,6 +827,18 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
     )
     echo "ct-ng toolchain installed under $FFBUILD_CTNG_ROOT"
     echo "Enable it with: FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl"
+fi
+
+if ((${#SETUP_FAILURES[@]})); then
+    echo
+    echo "== setup finished with ${#SETUP_FAILURES[@]} problem(s) =="
+    printf '%s\n' "${SETUP_FAILURES[@]}" | sort -u | sed 's/^/  - /'
+    echo "  managed build logs : $BT_PREFIX/log/"
+    echo "  distro packages    : ./native/setup.sh --check  (per-tool command) / README §2.1"
+    ffbuild_env_dump
+    echo
+    echo "The build will not work until these are resolved."
+    exit 1
 fi
 
 echo
