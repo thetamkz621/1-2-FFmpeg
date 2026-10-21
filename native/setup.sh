@@ -510,25 +510,33 @@ else
             echo "  WARNING: could not fetch opam; OCaml stays unprovisioned" >&2
         fi
     fi
+    opam_log="$FFBUILD_OPAM_ROOT/opam-install.log"
     if [[ -x "$opam_bin" ]]; then
         export OPAMROOT
         if [[ ! -d "$OPAMROOT" ]]; then
-            "$opam_bin" init --bare --disable-sandboxing -y >/dev/null 2>&1 ||
-                echo "  WARNING: opam init failed" >&2
+            "$opam_bin" init --bare --disable-sandboxing -y >"$opam_log" 2>&1 ||
+                echo "  WARNING: opam init failed (see $opam_log)" >&2
         fi
         if ! "$opam_bin" switch list --short 2>/dev/null | grep -qx default; then
             # Prefer the system compiler (fast); fall back to building one when
             # the distro has no OCaml at all or opam rejects its version.
-            if ! "$opam_bin" switch create default ocaml-system -y >/dev/null 2>&1; then
-                "$opam_bin" switch create default --packages="$FFBUILD_BT_OCAML_COMPILER" -y >/dev/null 2>&1 ||
-                    echo "  WARNING: could not create an opam switch" >&2
+            if ! "$opam_bin" switch create default ocaml-system -y >>"$opam_log" 2>&1; then
+                "$opam_bin" switch create default --packages="$FFBUILD_BT_OCAML_COMPILER" -y >>"$opam_log" 2>&1 ||
+                    echo "  WARNING: could not create an opam switch (see $opam_log)" >&2
             fi
         fi
-        "$opam_bin" install -y --switch=default ocamlfind ocamlbuild num >/dev/null 2>&1 ||
-            echo "  WARNING: opam could not install ocamlfind/ocamlbuild/num" >&2
-        if [[ -x "$OPAMROOT/default/bin/ocamlfind" ]]; then
-            echo "  OCaml + ocamlfind + ocamlbuild + num installed under $OPAMROOT"
-            echo "  (note: takes 1-2 min with a system compiler, 10-20 min without)"
+        # ocamlbuild's build aborts when a distro copy is present ("Preinstalled
+        # ocamlbuild detected at /usr/lib/ocaml/ocamlbuild"). The guard is a make
+        # variable, so it can be disabled through the environment.
+        if ! CHECK_IF_PREINSTALLED=false "$opam_bin" install -y --switch=default \
+                ocamlfind ocamlbuild num >>"$opam_log" 2>&1; then
+            echo "  WARNING: opam could not install ocamlfind/ocamlbuild/num (see $opam_log)" >&2
+        fi
+        if [[ -x "$OPAMROOT/default/bin/ocamlfind" && -f "$OPAMROOT/default/lib/num/META" ]]; then
+            echo "  OCaml + ocamlfind + num ready under $OPAMROOT"
+            echo "  (1-2 min with a system compiler, 10-20 min when opam builds one)"
+        else
+            echo "  ERROR: OCaml is still unusable; install it from your distro (README §2.1)" >&2
         fi
     fi
 fi
