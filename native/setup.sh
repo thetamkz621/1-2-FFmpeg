@@ -271,7 +271,12 @@ do_check() {
     if command -v ocaml >/dev/null 2>&1 && command -v ocamlbuild >/dev/null 2>&1 &&
        command -v ocamlfind >/dev/null 2>&1 &&
        ocamlfind list 2>/dev/null | grep -q '^num '; then
-        ocaml_ok=1
+        # env.sh 会把 opam switch 前置到 PATH，所以"能查到一个 ocamlfind"不等于
+        # 它来自发行版——按解析出来的路径判断来源，标签才不会说谎。
+        case "$(command -v ocamlfind)" in
+            "$OPAMROOT"/*) ocaml_ok=2 ;;
+            *)             ocaml_ok=1 ;;
+        esac
     elif [[ -f "$OPAMROOT/default/lib/num/META" ]]; then
         ocaml_ok=2
     fi
@@ -641,7 +646,7 @@ else
             fi
             if [[ -x "$OPAMROOT/default/bin/ocamlfind" && -f "$OPAMROOT/default/lib/num/META" ]]; then
                 echo "  OCaml + ocamlfind + num ready under $OPAMROOT"
-                echo "  (1-2 min with a system compiler, 10-20 min when opam builds one)"
+                echo "  (with a system compiler it takes about a minute; otherwise opam builds one)"
             else
                 echo "  ERROR: OCaml is still unusable — $(tool_hint ocaml)" >&2
                 note_failure "ocaml"
