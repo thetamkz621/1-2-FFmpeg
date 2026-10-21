@@ -34,11 +34,14 @@ FFBUILD_BT_URL_automake="${FFBUILD_BT_URL_automake:-https://ftp.gnu.org/gnu/auto
 FFBUILD_BT_SHA256_automake="${FFBUILD_BT_SHA256_automake:-168aa363278351b89af56684448f525a5bce5079d0b6842bd910fdd3f1646887}"
 
 # ------------------------------------------------------------------ cmake -----
-# 图内最高下限：libaribcaption 的 cmake_minimum_required(VERSION 3.28)
+# 图内最高下限：libaribcaption 的 cmake_minimum_required(VERSION 3.28)。
+# 装的是 3.31.x 而不是 3.28：3.28 的 bootstrap 里 kwsys 的探测程序没有 include
+# <unistd.h>，GCC 14 起不再隐式声明 environ，bootstrap 直接编译失败（3.29+ 已修）。
+# 也不上 4.x：它移除了对 cmake_minimum_required(<3.5) 的兼容，会踩到图里的一堆老项目。
 FFBUILD_BT_MIN_cmake="${FFBUILD_BT_MIN_cmake:-3.28}"
-FFBUILD_BT_INSTALL_cmake="${FFBUILD_BT_INSTALL_cmake:-3.28.3}"
-FFBUILD_BT_URL_cmake="${FFBUILD_BT_URL_cmake:-https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3.tar.gz}"
-FFBUILD_BT_SHA256_cmake="${FFBUILD_BT_SHA256_cmake:-72b7570e5c8593de6ac4ab433b73eab18c5fb328880460c86ce32608141ad5c1}"
+FFBUILD_BT_INSTALL_cmake="${FFBUILD_BT_INSTALL_cmake:-3.31.6}"
+FFBUILD_BT_URL_cmake="${FFBUILD_BT_URL_cmake:-https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6.tar.gz}"
+FFBUILD_BT_SHA256_cmake="${FFBUILD_BT_SHA256_cmake:-653427f0f5014750aafff22727fb2aa60c6c732ca91808cfb78ce22ddd9e55f0}"
 
 # ----------------------------------------------------------------- gettext -----
 # zvbi's configure.ac declares AM_GNU_GETTEXT_VERSION([0.21]); autopoint refuses
