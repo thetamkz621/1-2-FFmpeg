@@ -480,7 +480,7 @@ bt_build_cmake() {  # <url> <sha256> <prefix> [extra C++ flags]
 ac_cur="$(probe_version autoconf --version | awk '{print $NF}')"
 ac_man="$(probe_version "$FFBUILD_AUTOCONF_PREFIX/bin/autoconf" --version | awk '{print $NF}')"
 if [[ -n "$ac_cur" ]] && version_ge "$ac_cur" "$FFBUILD_BT_MIN_autoconf"; then
-    echo "note: system autoconf $ac_cur >= $FFBUILD_BT_MIN_autoconf"
+    echo "note: autoconf $ac_cur >= $FFBUILD_BT_MIN_autoconf"
 elif [[ -n "$ac_man" ]] && version_ge "$ac_man" "$FFBUILD_BT_MIN_autoconf"; then
     echo "note: managed autoconf $ac_man ready at $FFBUILD_AUTOCONF_PREFIX"
 else
@@ -512,7 +512,7 @@ fi
 cm_cur="$(probe_version cmake --version | awk '{print $3}')"
 cm_man="$(probe_version "$FFBUILD_CMAKE_PREFIX/bin/cmake" --version | awk '{print $3}')"
 if [[ -n "$cm_cur" ]] && version_ge "$cm_cur" "$FFBUILD_BT_MIN_cmake"; then
-    echo "note: system cmake $cm_cur >= $FFBUILD_BT_MIN_cmake"
+    echo "note: cmake $cm_cur >= $FFBUILD_BT_MIN_cmake"
 elif [[ -n "$cm_man" ]] && version_ge "$cm_man" "$FFBUILD_BT_MIN_cmake"; then
     echo "note: managed cmake $cm_man ready at $FFBUILD_CMAKE_PREFIX"
 else
@@ -527,7 +527,7 @@ fi
 ap_cur="$(probe_version autopoint --version | awk '{print $NF}')"
 ap_man="$(probe_version "$FFBUILD_GETTEXT_PREFIX/bin/autopoint" --version | awk '{print $NF}')"
 if [[ -n "$ap_cur" ]] && version_ge "$ap_cur" "$FFBUILD_BT_MIN_gettext"; then
-    echo "note: system autopoint $ap_cur >= $FFBUILD_BT_MIN_gettext"
+    echo "note: autopoint $ap_cur >= $FFBUILD_BT_MIN_gettext"
 elif [[ -n "$ap_man" ]] && version_ge "$ap_man" "$FFBUILD_BT_MIN_gettext"; then
     echo "note: managed gettext $ap_man ready at $FFBUILD_GETTEXT_PREFIX"
 else
