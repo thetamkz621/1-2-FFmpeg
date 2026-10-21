@@ -444,18 +444,25 @@ if [[ -z "$_ap_cur" ]] || ! _ffbuild_ver_ge "$_ap_cur" "${FFBUILD_BT_MIN_gettext
     _ffbuild_path_prepend "$FFBUILD_GETTEXT_PREFIX/bin"
 fi
 
-# automake 双轨：裸名看下限，版本名（gnulib）永远要 1.18
+# automake 双轨：裸名看下限，版本名（gnulib）永远要 1.18。
+# 是否介入由“版本名是否存在”决定，而不是系统版本号：Arch 的 automake 1.19 只提供
+# automake-1.19，裸名完全够用、libiconv 要的 automake-1.18 却没有。
 _am_cur="$(automake --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
-if [[ -n "$_am_cur" ]] && _ffbuild_ver_ge "$_am_cur" "${FFBUILD_BT_MIN_automake:-1.16.3}"; then
-    _ffbuild_path_append "$FFBUILD_AUTOMAKE_PREFIX/bin"
-else
-    _ffbuild_path_prepend "$FFBUILD_AUTOMAKE_PREFIX/bin"
+_am_major="${FFBUILD_BT_INSTALL_automake:-1.18.1}"
+_am_major="${_am_major%.*}"
+_am_bin="$FFBUILD_AUTOMAKE_PREFIX/bin"
+if [[ -d "$_am_bin" ]] && ! command -v "automake-$_am_major" >/dev/null 2>&1; then
+    if [[ -n "$_am_cur" ]] && _ffbuild_ver_ge "$_am_cur" "${FFBUILD_BT_MIN_automake:-1.16.3}"; then
+        _ffbuild_path_append "$_am_bin"
+    else
+        _ffbuild_path_prepend "$_am_bin"
+    fi
 fi
 
 if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/python3" ]]; then
     _ffbuild_path_prepend "$FFBUILD_PYTHON_PREFIX/bin"
 fi
-unset _ac_cur _cm_cur _am_cur _ap_cur
+unset _ac_cur _cm_cur _am_cur _am_major _am_bin _ap_cur
 export PATH
 
 # -------------------------------------------------------------- rust PATH -----

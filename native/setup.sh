@@ -154,15 +154,22 @@ do_check() {
             "$1" "${2:-none}" "$3" "${4:-none}" "$verdict"
     }
     btv autoconf "$ac_cur" "$FFBUILD_BT_MIN_autoconf" "$ac_man"
-    btv automake "$am_cur" "$FFBUILD_BT_MIN_automake" "$am_man"
-    # 裸名达标不等于够用：libiconv 的 Makefile.devel 写死 automake-1.18。
-    local am_major
+    # automake 有两条独立需求：裸名 >= 1.16.3（libxml2），以及 libiconv 写死的
+    # automake-1.18。系统版本比 1.18 新也未必提供那个名字（Arch 1.19 只给 1.19），
+    # 所以这条的判定看的是版本名在不在，而不是版本号大小。
+    local am_major am_name am_verdict
     am_major="${FFBUILD_BT_INSTALL_automake%.*}"
-    if command -v "automake-$am_major" >/dev/null 2>&1; then
-        printf '  %-9s automake-%s: %s\n' "" "$am_major" "$(command -v "automake-$am_major")"
+    am_name="$(command -v "automake-$am_major" 2>/dev/null || true)"
+    if [[ -z "$am_name" ]]; then
+        am_verdict="NEEDS INSTALL (no automake-$am_major)"
+    elif { [[ -n "$am_cur" ]] && version_ge "$am_cur" "$FFBUILD_BT_MIN_automake"; } ||
+         { [[ -n "$am_man" ]] && version_ge "$am_man" "$FFBUILD_BT_MIN_automake"; }; then
+        am_verdict="ok ($am_name)"
     else
-        printf '  %-9s [MISSING] automake-%s (libiconv calls it by name)\n' "" "$am_major"
+        am_verdict="NEEDS INSTALL (bare automake < $FFBUILD_BT_MIN_automake)"
     fi
+    printf '  %-9s system=%-8s min=%-7s managed=%-8s %s\n' \
+        automake "${am_cur:-none}" "$FFBUILD_BT_MIN_automake" "${am_man:-none}" "$am_verdict"
     btv cmake    "$cm_cur" "$FFBUILD_BT_MIN_cmake"    "$cm_man"
     local py_bin py_ver
     py_bin=""
@@ -387,18 +394,20 @@ else
 fi
 
 # --------------------------------------------------------------- automake -----
-# 裸名 automake 的图内下限是 1.16.3（libxml2），而 libiconv 的 Makefile.devel
-# 写死 automake-1.18 / aclocal-1.18。只要系统不是 >= 1.18，就要装一份 1.18，
-# 才能同时满足这两条。
+# 两条独立需求：裸名 automake 的图内下限是 1.16.3（libxml2），而 libiconv 的
+# Makefile.devel 写死 automake-1.18 / aclocal-1.18。系统版本比 1.18 新也不等于够用：
+# Arch 的 automake 1.19 只装出 automake-1.19，版本名仍然缺。所以判据是“这个版本名
+# 在 PATH 里存不存在”，不是版本号大小。
 am_cur="$(probe_version automake --version | awk '{print $NF}')"
 am_major="${FFBUILD_BT_INSTALL_automake%.*}"
 am_man="$(probe_version "$FFBUILD_AUTOMAKE_PREFIX/bin/automake" --version | awk '{print $NF}')"
-if [[ -n "$am_cur" ]] && version_ge "$am_cur" "$am_major"; then
-    echo "note: system automake $am_cur provides automake-$am_major"
-elif [[ -n "$am_man" ]] && version_ge "$am_man" "$am_major"; then
+if [[ -n "$am_man" ]] && version_ge "$am_man" "$am_major"; then
     echo "note: managed automake $am_man ready at $FFBUILD_AUTOMAKE_PREFIX"
+elif command -v "automake-$am_major" >/dev/null 2>&1; then
+    echo "note: system automake $am_cur provides automake-$am_major"
 else
     echo "== building automake $FFBUILD_BT_INSTALL_automake into $FFBUILD_AUTOMAKE_PREFIX =="
+    echo "   (system automake is ${am_cur:-absent} and provides no automake-$am_major)"
     bt_build_configure "$FFBUILD_BT_URL_automake" "$FFBUILD_BT_SHA256_automake" "$FFBUILD_AUTOMAKE_PREFIX" ||
         echo "  WARNING: automake build failed" >&2
 fi
