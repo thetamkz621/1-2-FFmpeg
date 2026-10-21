@@ -230,12 +230,22 @@ build_deps() {
     echo "   $(wc -l <<<"$ORDER") stages in dependency order"
 
     for STAGE in $ORDER; do
+        # The graph entry is the aggregator zz-final.sh: it contributes
+        # dependencies but builds nothing, and it is reached here as a *path*
+        # (ffbuild_entry_script prints one), so stage resolution would fail and
+        # report it as skipped. Leave it out instead of printing noise.
+        [[ "$STAGE" == "$ENTRY" ]] && continue
         if ffbuild_stage_skipped "$STAGE"; then
             echo "-- skip (FFBUILD_SKIP_STAGES): $STAGE"
             continue
         fi
+        # A stage can be off for reasons other than the target: the license
+        # variant (x264 under lgpl, fdk-aac outside nonfree), the FFmpeg version
+        # it needs, or an addin. Naming the target alone would blame the wrong
+        # thing, so state what it is not applicable *to* and leave the reason to
+        # the stage itself.
         if ! ffbuild_stage_enabled "$STAGE"; then
-            echo "-- skip (disabled for $TARGET): $STAGE"
+            echo "-- skip (not applicable to $TARGET/$VARIANT): $STAGE"
             continue
         fi
         while IFS= read -r SCRIPT; do
