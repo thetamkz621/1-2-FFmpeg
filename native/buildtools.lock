@@ -48,6 +48,35 @@ FFBUILD_BT_INSTALL_gettext="${FFBUILD_BT_INSTALL_gettext:-0.22.5}"
 FFBUILD_BT_URL_gettext="${FFBUILD_BT_URL_gettext:-https://ftp.gnu.org/gnu/gettext/gettext-0.22.5.tar.xz}"
 FFBUILD_BT_SHA256_gettext="${FFBUILD_BT_SHA256_gettext:-fe10c37353213d78a5b83d48af231e005c4da84db5ce88037d88355938259640}"
 
+# ------------------------------------------------------------------- nasm -----
+# FFmpeg refuses to build x86 asm below 2.13 ("nasm >= 2.13 required"); x264 also
+# needs it. EL8 keeps nasm in CRB (powertools), not in base/EPEL, so a host that
+# did not enable that repo simply has no assembler.
+FFBUILD_BT_MIN_nasm="${FFBUILD_BT_MIN_nasm:-2.13}"
+FFBUILD_BT_INSTALL_nasm="${FFBUILD_BT_INSTALL_nasm:-2.16.03}"
+FFBUILD_BT_URL_nasm="${FFBUILD_BT_URL_nasm:-https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz}"
+FFBUILD_BT_SHA256_nasm="${FFBUILD_BT_SHA256_nasm:-1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148}"
+
+# ------------------------------------------------------------------- yasm -----
+# FFmpeg accepts either assembler, but only linux64 + current FFmpeg were tested;
+# older FFmpeg and the win* targets may still prefer yasm, so keep it available
+# and managed rather than assuming nasm is enough.
+FFBUILD_BT_MIN_yasm="${FFBUILD_BT_MIN_yasm:-1.3.0}"
+FFBUILD_BT_INSTALL_yasm="${FFBUILD_BT_INSTALL_yasm:-1.3.0}"
+FFBUILD_BT_URL_yasm="${FFBUILD_BT_URL_yasm:-http://www.tortall.net/projects/yasm/releases/yasm-1.3.0.tar.gz}"
+FFBUILD_BT_SHA256_yasm="${FFBUILD_BT_SHA256_yasm:-3dce6601b495f5b3d45b59f7d2492a340ee7e84b5beca17e48f862502bd5603f}"
+
+# ------------------------------------------------------------------- opam -----
+# OCaml is *documented* as a prerequisite; opam is only the fallback for hosts
+# where OCaml is missing or the findlib package "num" is unavailable (EL8 ships
+# no num at all). opam itself is a static binary, so no compiler is needed to
+# bootstrap it. The switch lives under $FFBUILD_BUILDTOOLS_PREFIX/opam.
+FFBUILD_BT_INSTALL_opam="${FFBUILD_BT_INSTALL_opam:-2.6.1}"
+FFBUILD_BT_URL_opam="${FFBUILD_BT_URL_opam:-https://github.com/ocaml/opam/releases/download/2.6.1/opam-2.6.1-x86_64-linux}"
+FFBUILD_BT_SHA256_opam="${FFBUILD_BT_SHA256_opam:-b533d393a6967150d6ef41cb3d71e147e93ecbabeb59e921aa412c0ae79ebe3d}"
+# OCaml compiler used when the host has no usable system OCaml at all.
+FFBUILD_BT_OCAML_COMPILER="${FFBUILD_BT_OCAML_COMPILER:-ocaml-base-compiler.4.14.3}"
+
 # ----------------------------------------------------------------- python -----
 # meson 1.12.1 的 Requires-Python 是 >=3.10；Python 不构建，只在版本不足时提示安装。
 FFBUILD_BT_SYSTEM_python="${FFBUILD_BT_SYSTEM_python:-3.10}"

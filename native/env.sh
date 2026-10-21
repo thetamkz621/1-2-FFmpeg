@@ -424,9 +424,12 @@ FFBUILD_AUTOCONF_PREFIX="${FFBUILD_AUTOCONF_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/a
 FFBUILD_AUTOMAKE_PREFIX="${FFBUILD_AUTOMAKE_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/automake-${FFBUILD_BT_INSTALL_automake:-1.18.1}}"
 FFBUILD_CMAKE_PREFIX="${FFBUILD_CMAKE_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/cmake-${FFBUILD_BT_INSTALL_cmake:-3.28.3}}"
 FFBUILD_GETTEXT_PREFIX="${FFBUILD_GETTEXT_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/gettext-${FFBUILD_BT_INSTALL_gettext:-0.22.5}}"
+FFBUILD_NASM_PREFIX="${FFBUILD_NASM_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/nasm-${FFBUILD_BT_INSTALL_nasm:-2.16.03}}"
+FFBUILD_YASM_PREFIX="${FFBUILD_YASM_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/yasm-${FFBUILD_BT_INSTALL_yasm:-1.3.0}}"
 FFBUILD_PYTHON_PREFIX="${FFBUILD_PYTHON_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/venv}"
 export FFBUILD_AUTOCONF_PREFIX FFBUILD_AUTOMAKE_PREFIX FFBUILD_CMAKE_PREFIX \
-       FFBUILD_GETTEXT_PREFIX FFBUILD_PYTHON_PREFIX
+       FFBUILD_GETTEXT_PREFIX FFBUILD_PYTHON_PREFIX \
+       FFBUILD_NASM_PREFIX FFBUILD_YASM_PREFIX
 
 _ac_cur="$(autoconf --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
 if [[ -z "$_ac_cur" ]] || ! _ffbuild_ver_ge "$_ac_cur" "${FFBUILD_BT_MIN_autoconf:-2.73}"; then
@@ -442,6 +445,17 @@ fi
 _ap_cur="$(autopoint --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
 if [[ -z "$_ap_cur" ]] || ! _ffbuild_ver_ge "$_ap_cur" "${FFBUILD_BT_MIN_gettext:-0.21}"; then
     _ffbuild_path_prepend "$FFBUILD_GETTEXT_PREFIX/bin"
+fi
+
+# x86 汇编器：FFmpeg 要求 nasm >= 2.13（x264 同样），EL8 的 nasm 在 CRB 而不是
+# base/EPEL；yasm 保留为备选（老版本 FFmpeg 与 win* 目标仍可能用它）。
+_nasm_cur="$(nasm --version 2>/dev/null | sed -n '1p' | awk '{print $3}')" || true
+if [[ -z "$_nasm_cur" ]] || ! _ffbuild_ver_ge "$_nasm_cur" "${FFBUILD_BT_MIN_nasm:-2.13}"; then
+    _ffbuild_path_prepend "$FFBUILD_NASM_PREFIX/bin"
+fi
+_yasm_cur="$(yasm --version 2>/dev/null | sed -n '1p' | awk '{print $2}')" || true
+if [[ -z "$_yasm_cur" ]] || ! _ffbuild_ver_ge "$_yasm_cur" "${FFBUILD_BT_MIN_yasm:-1.3.0}"; then
+    _ffbuild_path_prepend "$FFBUILD_YASM_PREFIX/bin"
 fi
 
 # automake 双轨：裸名看下限，版本名（gnulib）永远要 1.18。
@@ -462,19 +476,37 @@ fi
 if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/python3" ]]; then
     _ffbuild_path_prepend "$FFBUILD_PYTHON_PREFIX/bin"
 fi
-unset _ac_cur _cm_cur _am_cur _am_major _am_bin _ap_cur
+unset _ac_cur _cm_cur _am_cur _am_major _am_bin _ap_cur _nasm_cur _yasm_cur
 export PATH
 
 # -------------------------------------------------------------- rust PATH -----
 # rav1e and librsvg build with cargo; librsvg even runs `cargo vendor` during its
 # download step. `native/setup.sh --with-rust` installs this toolchain.
-export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+#
+# It lives in the managed-tools tree like everything else: a build host should
+# not have ~/.cargo or ~/.rustup appear behind the user's back, and "delete the
+# repo" should delete the toolchain too.
+export CARGO_HOME="${CARGO_HOME:-$FFBUILD_BUILDTOOLS_PREFIX/cargo}"
+export RUSTUP_HOME="${RUSTUP_HOME:-$FFBUILD_BUILDTOOLS_PREFIX/rustup}"
 if [[ -d "$CARGO_HOME/bin" ]]; then
     case ":$PATH:" in
         *":$CARGO_HOME/bin:"*) ;;
         *) export PATH="$CARGO_HOME/bin:$PATH" ;;
     esac
+fi
+
+# -------------------------------------------------------------- ocaml --------
+# OCaml is a documented prerequisite (fftw3 generates its codelets with OCaml's
+# genfft, which needs ocamlbuild plus the findlib package "num"). When the host
+# lacks either, native/setup.sh provisions OCaml through opam — and opam keeps
+# everything under $FFBUILD_OPAM_ROOT, so no ~/.opam is created either.
+#
+# The switch's bin dir must win over a system OCaml: it carries the ocamlfind /
+# ocamlbuild / num that match each other.
+FFBUILD_OPAM_ROOT="${FFBUILD_OPAM_ROOT:-$FFBUILD_BUILDTOOLS_PREFIX/opam}"
+export OPAMROOT="$FFBUILD_OPAM_ROOT/root"
+if [[ -x "$OPAMROOT/default/bin/ocamlfind" ]]; then
+    _ffbuild_path_prepend "$OPAMROOT/default/bin"
 fi
 
 # -------------------------------------------------------------- util PATH -----
