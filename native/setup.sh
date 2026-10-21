@@ -99,6 +99,8 @@ tool_hint() {
         texinfo|makeinfo) install_hint texinfo texinfo texinfo ;;
         unzip)      install_hint unzip unzip unzip ;;
         ant)        install_hint "ant default-jdk-headless" "ant java-17-openjdk-headless" "ant jdk-openjdk" ;;
+        openssl3-devel|openssl-devel|libssl-dev)
+            install_hint "libssl-dev" "openssl-devel (EL8: openssl3-devel)" openssl ;;
         ocaml)      install_hint "ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev" \
                                  "ocaml ocaml-findlib ocaml-ocamlbuild" \
                                  "ocaml ocaml-findlib ocamlbuild" ;;
@@ -244,7 +246,12 @@ do_check() {
 
     echo "== runtime prerequisites (not managed; install from your distro) =="
     rt_ok()      { printf '  [ok]      %s\n' "$1"; }
-    rt_missing() { printf '  [MISSING] %s\n              %s\n' "$1" "$2"; }
+    # 第三个参数为 optional 时只提示、不影响退出码（例如 cargo-c 的 OpenSSL 3 只在 --with-rust 时需要）。
+    rt_blocking=0
+    rt_missing() {
+        printf '  [MISSING] %s\n              %s\n' "$1" "$2"
+        [[ "${3:-}" == optional ]] || rt_blocking=1
+    }
 
     if perl -MTime::Piece -e1 2>/dev/null; then
         rt_ok "perl(Time::Piece)      openssl"
@@ -310,8 +317,7 @@ do_check() {
     elif [[ -f /usr/include/openssl3/openssl/ssl.h ]]; then
         rt_ok "OpenSSL 3 dev tree     cargo-c (/usr/include/openssl3, system $ossl_ver)"
     else
-        rt_missing "OpenSSL >= 3           cargo-c" \
-                   "dnf install openssl3-devel; then OPENSSL_INCLUDE_DIR=/usr/include/openssl3 OPENSSL_LIB_DIR=/usr/lib64/openssl3"
+        rt_missing "OpenSSL >= 3           cargo-c" "$(tool_hint openssl3-devel)" optional
     fi
     unset -f rt_ok rt_missing
     echo
@@ -337,9 +343,14 @@ do_check() {
     fi
     echo
     ffbuild_env_dump
-    if ((${#missing[@]})); then
+    if ((${#missing[@]})) || (( rt_blocking )); then
         echo
-        echo "Missing required tools: ${missing[*]}"
+        if ((${#missing[@]})); then
+            echo "Missing required tools: ${missing[*]}"
+        fi
+        if (( rt_blocking )); then
+            echo "Missing runtime prerequisites: see the [MISSING] lines above."
+        fi
         echo "  distro packages: install them as shown above (README §2.1), then re-run this check."
         echo "  managed tools  : if cmake / nasm / yasm / OCaml are the gaps, './native/setup.sh'"
         echo "                   builds them — failures are explained inline, logs in"
