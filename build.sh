@@ -197,8 +197,11 @@ run_one_script() {
     rm -rf "$FFBUILD_DESTDIR"
     mkdir -p "$FFBUILD_DESTDIR" "$FFBUILD_PREFIX"
 
-    SELF="$SCRIPT" STAGENAME="$STAGENAME" STAGE_CACHE="$CACHE" \
-        bash util/run_stage.sh "$SCRIPT"
+    if ! SELF="$SCRIPT" STAGENAME="$STAGENAME" STAGE_CACHE="$CACHE" \
+            bash util/run_stage.sh "$SCRIPT"; then
+        echo "ERROR: stage $STAGENAME failed; not marking it done" >&2
+        return 1
+    fi
 
     touch "$FFBUILD_STATE/${STAGENAME}.done"
 }
