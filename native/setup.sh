@@ -9,8 +9,8 @@
 #
 # Usage:
 #   ./native/setup.sh                 # install core build prerequisites
-#   ./native/setup.sh --all           # + optional deps (rust, node, extra libs)
-#   ./native/setup.sh --with-rust     # rustup + cargo-c (needed by rav1e/librsvg)
+#   ./native/setup.sh --all           # + optional deps (rust, extra libs)
+#   ./native/setup.sh --with-rust     # rust toolchain + cargo-c (needed by rav1e/librsvg)
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
 #   ./native/setup.sh --no-apt        # skip package installation (host manages its own)
 #   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
@@ -27,7 +27,6 @@ DO_CHECK=0
 DO_ALL=0
 WITH_RUST=0
 WITH_CTNG=0
-WITH_NODE=0
 NO_APT=0
 PRINT_APT=0
 ONLY_BUILDTOOLS=0
@@ -35,9 +34,8 @@ ONLY_BUILDTOOLS=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --check)      DO_CHECK=1 ;;
-    --all)        DO_ALL=1; WITH_RUST=1; WITH_NODE=1 ;;
+    --all)        DO_ALL=1; WITH_RUST=1 ;;
     --with-rust)  WITH_RUST=1 ;;
-    --with-node)  WITH_NODE=1 ;;
     --with-ctng)  WITH_CTNG=1 ;;
     --no-apt)     NO_APT=1 ;;
     --print-apt)  PRINT_APT=1 ;;
@@ -47,6 +45,10 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+if [[ -n "${FFBUILD_IGNORED_CARGO_HOME:-}${FFBUILD_IGNORED_RUSTUP_HOME:-}" ]]; then
+    echo "note: ignoring CARGO_HOME/RUSTUP_HOME from the environment; build caches stay under $FFBUILD_BUILDTOOLS_PREFIX"
+fi
 
 # ---------------------------------------------------------------- sudo --------
 if [[ "$(id -u)" -eq 0 ]]; then
@@ -436,7 +438,10 @@ bt_fetch() {  # <url> <dest> <sha256>
 
 bt_unpack() {  # <url> <sha256> -> prints a temp dir containing ./src
     local tmp
-    tmp="$(mktemp -d)"
+    # Keep unpacked sources inside the repo: a failed managed build leaves the
+    # tree behind for inspection, and deleting the repo must delete it too.
+    mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/tmp"
+    tmp="$(mktemp -d "$FFBUILD_BUILDTOOLS_PREFIX/tmp/build.XXXXXX")"
     bt_fetch "$1" "$tmp/src.tar" "$2" || { rm -rf "$tmp"; return 1; }
     mkdir -p "$tmp/src"
     tar -xf "$tmp/src.tar" -C "$tmp/src" --strip-components=1 || { rm -rf "$tmp"; return 1; }
@@ -638,8 +643,19 @@ else
             unset _m
             note_failure "ocaml (opam prerequisites missing: ${opam_missing[*]})"
         else
+            # opam init would otherwise offer to edit the user's shell profile.
+            # The switch was renamed over time (2.0: --no-setup, 2.1+:
+            # --no-shell-setup), so use whichever this binary advertises.
+            opam_init_flags=(--bare --disable-sandboxing -y)
+            if "$opam_bin" init --help 2>&1 | grep -q -- "--no-shell-setup"; then
+                opam_init_flags+=(--no-shell-setup)
+            elif "$opam_bin" init --help 2>&1 | grep -q -- "--no-setup"; then
+                opam_init_flags+=(--no-setup)
+            else
+                echo "  WARNING: this opam offers no way to skip shell setup; check ~/.profile afterwards" >&2
+            fi
             if [[ ! -d "$OPAMROOT" ]] &&
-               ! "$opam_bin" init --bare --disable-sandboxing -y >"$opam_log" 2>&1; then
+               ! "$opam_bin" init "${opam_init_flags[@]}" >"$opam_log" 2>&1; then
                 echo "  WARNING: opam init failed (see $opam_log)" >&2
                 note_failure "ocaml (opam init failed)"
             fi
@@ -712,7 +728,7 @@ else
             { echo "  WARNING: could not create venv with $PYBIN" >&2; }
     fi
     if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/pip" ]] &&
-        "$FFBUILD_PYTHON_PREFIX/bin/pip" install --quiet --upgrade pip "${PY_MODULES[@]}"; then
+        "$FFBUILD_PYTHON_PREFIX/bin/pip" install --quiet --no-cache-dir --upgrade pip "${PY_MODULES[@]}"; then
         echo "  python: $("$FFBUILD_PYTHON_PREFIX/bin/python3" -V 2>&1)"
         echo "  meson:  $("$FFBUILD_PYTHON_PREFIX/bin/meson" --version 2>/dev/null)"
     else
@@ -769,14 +785,8 @@ echo "== creating build root =="
 mkdir -p "$FFBUILD_ROOT"/{prefix,destdir,work,log} "$FFBUILD_ROOT/prefix/lib/pkgconfig" "$FFBUILD_ROOT/prefix/include" "$FFBUILD_ROOT/prefix/bin"
 echo "  $FFBUILD_ROOT"
 
-# The upstream base image sets a git identity; `git am` in the aom/aribb24
-# stages needs one.
-if ! git config --global user.email >/dev/null 2>&1; then
-    git config --global user.email "builder@localhost"
-    git config --global user.name "Builder"
-    echo "  git identity configured (builder@localhost)"
-fi
-git config --global advice.detachedHead false 2>/dev/null || true
+# `git am` needs a committer identity, but setup must not write ~/.gitconfig:
+# util/run_stage.sh exports a throwaway one for the stage process tree only.
 
 # ---------------------------------------------------------------- rust --------
 if [[ "$WITH_RUST" -eq 1 ]]; then
@@ -819,14 +829,6 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
     fi
 else
     command -v cargo >/dev/null 2>&1 || echo "note: rust/cargo absent — rav1e & librsvg(rust) will be skipped. Use --with-rust."
-fi
-
-# ---------------------------------------------------------------- node --------
-if [[ "$WITH_NODE" -eq 1 ]]; then
-    echo "== installing nodejs =="
-    if ! command -v node >/dev/null 2>&1; then
-        asroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs npm
-    fi
 fi
 
 # ---------------------------------------------------------------- ct-ng -------

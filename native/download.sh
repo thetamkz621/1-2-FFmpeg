@@ -71,6 +71,11 @@ export RETRY_MAX="${RETRY_MAX:-8}"
 # Clean up work dirs left behind by an interrupted previous run.
 rm -rf "$FFBUILD_ROOT"/.dl.* 2>/dev/null || true
 
+# Download steps may create temp dirs (librsvg's `cargo vendor` does). Keep them
+# in the build root so they disappear with it instead of piling up in /tmp.
+export TMPDIR="$FFBUILD_ROOT/.tmp"
+mkdir -p "$TMPDIR"
+
 process_stage() {
     local STAGE="$1"
     (

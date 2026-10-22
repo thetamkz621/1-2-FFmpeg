@@ -55,6 +55,13 @@ export "GIT_CONFIG_KEY_${_git_cfg_index}=safe.directory"
 export "GIT_CONFIG_VALUE_${_git_cfg_index}=$PWD"
 unset _git_cfg_index
 
+# `git am` (used by 50-aom) needs a committer identity. Provide a throwaway one
+# for this process tree only -- never write to ~/.gitconfig.
+export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-FFmpeg Builds}"
+export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-builder@localhost}"
+export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-FFmpeg Builds}"
+export GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-builder@localhost}"
+
 # shellcheck disable=SC1090
 source "$STAGE_SCRIPT"
 if [[ -z "${2:-}" ]]; then

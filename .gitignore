@@ -1,7 +1,7 @@
 # Native build workspace / output
 /.ffbuild/
 /ffbuild/
-/ffbuild-clang/
+/ffbuild*/
 /artifacts/
 /.cache/
 /.buildtools/

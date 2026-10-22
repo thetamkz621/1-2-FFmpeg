@@ -479,15 +479,43 @@ fi
 unset _ac_cur _cm_cur _am_cur _am_major _am_bin _ap_cur _nasm_cur _yasm_cur
 export PATH
 
+# -------------------------------------------------------------- git env -------
+# Download steps check out pinned commits, and git's detached-HEAD advice is
+# pure noise here. GIT_CONFIG_* is a per-process override: nothing is written to
+# ~/.gitconfig (util/run_stage.sh appends its safe.directory entry the same way).
+if [[ -z "${FFBUILD_GIT_ENV_SET:-}" ]]; then
+    _ffbuild_git_cfg="${GIT_CONFIG_COUNT:-0}"
+    export GIT_CONFIG_COUNT=$((_ffbuild_git_cfg + 1))
+    export "GIT_CONFIG_KEY_${_ffbuild_git_cfg}=advice.detachedHead"
+    export "GIT_CONFIG_VALUE_${_ffbuild_git_cfg}=false"
+    export FFBUILD_GIT_ENV_SET=1
+    unset _ffbuild_git_cfg
+fi
+
 # -------------------------------------------------------------- rust PATH -----
 # rav1e and librsvg build with cargo; librsvg even runs `cargo vendor` during its
-# download step. `native/setup.sh --with-rust` installs this toolchain.
+# download step. `native/setup.sh --with-rust` provisions this toolchain.
 #
-# It lives in the managed-tools tree like everything else: a build host should
-# not have ~/.cargo or ~/.rustup appear behind the user's back, and "delete the
-# repo" should delete the toolchain too.
-export CARGO_HOME="${CARGO_HOME:-$FFBUILD_BUILDTOOLS_PREFIX/cargo}"
-export RUSTUP_HOME="${RUSTUP_HOME:-$FFBUILD_BUILDTOOLS_PREFIX/rustup}"
+# Both homes belong to the build tree, not to the user's account: a build host
+# should not get ~/.cargo or ~/.rustup behind its back, and "delete the repo"
+# should delete the toolchain too. FFBUILD_CARGO_HOME / FFBUILD_RUSTUP_HOME are
+# the knobs; CARGO_HOME / RUSTUP_HOME are always derived from them. Values the
+# user exported are recorded so setup can say they were ignored.
+FFBUILD_HOST_CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+FFBUILD_HOST_RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+FFBUILD_CARGO_HOME="${FFBUILD_CARGO_HOME:-$FFBUILD_BUILDTOOLS_PREFIX/cargo}"
+FFBUILD_RUSTUP_HOME="${FFBUILD_RUSTUP_HOME:-$FFBUILD_BUILDTOOLS_PREFIX/rustup}"
+export FFBUILD_HOST_CARGO_HOME FFBUILD_HOST_RUSTUP_HOME
+export FFBUILD_CARGO_HOME FFBUILD_RUSTUP_HOME
+unset FFBUILD_IGNORED_CARGO_HOME FFBUILD_IGNORED_RUSTUP_HOME
+if [[ -n "${CARGO_HOME:-}" && "${CARGO_HOME}" != "$FFBUILD_CARGO_HOME" ]]; then
+    export FFBUILD_IGNORED_CARGO_HOME="$CARGO_HOME"
+fi
+if [[ -n "${RUSTUP_HOME:-}" && "${RUSTUP_HOME}" != "$FFBUILD_RUSTUP_HOME" ]]; then
+    export FFBUILD_IGNORED_RUSTUP_HOME="$RUSTUP_HOME"
+fi
+export CARGO_HOME="$FFBUILD_CARGO_HOME"
+export RUSTUP_HOME="$FFBUILD_RUSTUP_HOME"
 if [[ -d "$CARGO_HOME/bin" ]]; then
     case ":$PATH:" in
         *":$CARGO_HOME/bin:"*) ;;
