@@ -62,6 +62,11 @@ export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-builder@localhost}"
 export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-FFmpeg Builds}"
 export GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-builder@localhost}"
 
+# gnulib's pygnulib (run by libiconv's bootstrap) otherwise puts its bytecode
+# cache in $TMPDIR/gnulib-python-cache-$USER. Keep it in the build root; it
+# honours PYTHONPYCACHEPREFIX when set.
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-$FFBUILD_ROOT/.pycache}"
+
 # shellcheck disable=SC1090
 source "$STAGE_SCRIPT"
 if [[ -z "${2:-}" ]]; then
