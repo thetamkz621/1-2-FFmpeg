@@ -790,17 +790,10 @@ echo "  $FFBUILD_ROOT"
 
 # ---------------------------------------------------------------- rust --------
 if [[ "$WITH_RUST" -eq 1 ]]; then
-    echo "== installing rust toolchain (rustup + cargo-c) =="
-    # env.sh points these at $FFBUILD_BUILDTOOLS_PREFIX/{cargo,rustup}: the
-    # toolchain belongs to the build tree, not to the user's home directory.
-    export CARGO_HOME="${CARGO_HOME:-$FFBUILD_BUILDTOOLS_PREFIX/cargo}"
-    export RUSTUP_HOME="${RUSTUP_HOME:-$FFBUILD_BUILDTOOLS_PREFIX/rustup}"
+    echo "== preparing rust toolchain (rav1e / librsvg) =="
+    # env.sh already pointed CARGO_HOME/RUSTUP_HOME into .buildtools. Keep them
+    # there unless the host already has a usable toolchain (see below).
     mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
-    if ! command -v rustup >/dev/null 2>&1; then
-        curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path
-    fi
-    # shellcheck disable=SC1091
-    source "$CARGO_HOME/env" 2>/dev/null || true
     # cargo-c's build must see *system* pkg-config files (e.g. openssl); the
     # prefix-only PKG_CONFIG_LIBDIR installed by native/env.sh would hide them.
     #
@@ -817,18 +810,72 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
             echo "           install it (dnf install openssl3-devel) or skip --with-rust" >&2
         fi
     fi
-    if ! command -v cargo-cinstall >/dev/null 2>&1; then
+    # cargo-c is the only piece that has no distro package; everything else
+    # (cargo, rustc) is reused from the host when it works.
+    cargo_c_install() {
         (
             unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH
-            # 中间产物不放 TMPDIR（可能是 tmpfs）也不放 ~/.cargo：cargo-c 的构建很吃空间，
-            # TMPDIR 若是 tmpfs 等于把内存当磁盘用。
+            # 中间产物不放 TMPDIR（可能是 tmpfs）也不放 ~/.cargo：cargo-c 的构建很吃空间。
             mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/tmp" "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target"
             TMPDIR="$FFBUILD_BUILDTOOLS_PREFIX/tmp" \
                 cargo install --target-dir "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target" cargo-c
         )
+    }
+
+    rust_ok=0
+    had_cargo=0
+    if command -v cargo-cinstall >/dev/null 2>&1; then
+        echo "note: cargo-c already present: $(command -v cargo-cinstall)"
+        rust_ok=1
+    elif command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
+        echo "note: using the rust already on PATH: $(rustc --version 2>/dev/null | sed -n 1p)"
+        had_cargo=1
+        if cargo_c_install; then rust_ok=1; fi
+    fi
+
+    if (( ! rust_ok )); then
+        rustup_bin="$(command -v rustup || true)"
+        if [[ -z "$rustup_bin" ]]; then
+            echo "== installing rustup into $FFBUILD_RUSTUP_HOME =="
+            if ! curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal; then
+                echo "  WARNING: rustup install failed" >&2
+                note_failure "rust (rustup install)"
+            fi
+            export PATH="$CARGO_HOME/bin:$PATH"
+        else
+            # rustup exists but its toolchain is unusable (or cargo-c could not
+            # be built with the system one). Link the host toolchain into the
+            # repo when possible: no download, and the repo stays self-contained.
+            host_tc=""
+            for _tc in "$FFBUILD_HOST_RUSTUP_HOME"/toolchains/*; do
+                [[ -x "$_tc/bin/rustc" ]] && host_tc="$_tc" && break
+            done
+            unset _tc
+            if [[ -n "$host_tc" && "$had_cargo" -eq 0 ]]; then
+                echo "note: reusing host toolchain $(basename "$host_tc")"
+                RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" toolchain link ffbuild-host "$host_tc" >/dev/null 2>&1 || true
+                RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" default ffbuild-host >/dev/null 2>&1 || true
+            else
+                echo "== installing a rust toolchain into $FFBUILD_RUSTUP_HOME =="
+                RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" toolchain install stable --profile minimal || \
+                    note_failure "rust (toolchain install)"
+                RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" default stable >/dev/null 2>&1 || true
+            fi
+        fi
+        if command -v cargo >/dev/null 2>&1 && cargo_c_install; then
+            rust_ok=1
+        fi
+        if (( ! rust_ok )); then
+            echo "  WARNING: no usable rust toolchain; rav1e/librsvg cannot build" >&2
+            note_failure "rust (toolchain)"
+        fi
     fi
 else
-    command -v cargo >/dev/null 2>&1 || echo "note: rust/cargo absent — rav1e & librsvg(rust) will be skipped. Use --with-rust."
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "note: rust/cargo absent — rav1e and librsvg cannot be built; run ./native/setup.sh --with-rust" >&2
+    elif ! command -v cargo-cinstall >/dev/null 2>&1; then
+        echo "note: cargo-c absent — rav1e cannot be built; run ./native/setup.sh --with-rust" >&2
+    fi
 fi
 
 # ---------------------------------------------------------------- ct-ng -------
