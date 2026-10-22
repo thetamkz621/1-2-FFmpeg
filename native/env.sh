@@ -290,13 +290,20 @@ export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
 #            shows up in a clang build ("davs2 >= 1.6.0 not found using
 #            pkg-config"). Override with e.g. -lc++ for a libc++ toolchain, or
 #            set it empty to add nothing.
-#   -latomic librubberband's static archive calls __atomic_is_lock_free but its
-#            .pc carries no Libs.private, so the probe link failed with
-#            "undefined reference to `__atomic_is_lock_free'". Note this cannot
-#            be made a static dependency from here: glib's own .pc files emit
-#            -latomic ahead of this list, so the binary picks it up dynamically
-#            regardless of how it is written here.
-export FFBUILD_EXTRA_LIBS="${FFBUILD_EXTRA_LIBS--lm -lstdc++ -latomic}"
+#   -latomic only for clang: librubberband's static archive references
+#            __atomic_is_lock_free. GCC inlines that builtin for known sizes, so
+#            its objects carry no reference; clang emits a real call and the
+#            probe link fails with "undefined reference to
+#            `__atomic_is_lock_free'". Passing -latomic unconditionally breaks
+#            hosts whose compiler has no libatomic.so (EL8's gcc-toolset before
+#            gcc-toolset-14-libatomic-devel), where gcc does not need it at all.
+export FFBUILD_EXTRA_LIBS="${FFBUILD_EXTRA_LIBS--lm -lstdc++}"
+case "$CC" in
+    *clang*)
+        [[ "$FFBUILD_EXTRA_LIBS" == *-latomic* ]] ||
+            FFBUILD_EXTRA_LIBS="$FFBUILD_EXTRA_LIBS -latomic"
+        ;;
+esac
 # Both descriptors are generated into the repo (see ffbuild_write_toolchain_files
 # below) so no root-owned copy under / is needed.  Stage scripts reach them
 # through these variables.
