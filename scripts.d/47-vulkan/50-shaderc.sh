@@ -22,7 +22,9 @@ ffbuild_dockerbuild() {
         -DSPIRV_TOOLS_BUILD_STATIC=ON -DBUILD_SHARED_LIBS=OFF ..
     ninja -j$(nproc)
 
-    export DESTDIR="/tmp/staging$FFBUILD_DESTDIR"
+    # Keep the staging tree inside the build dir: /tmp may be a different
+    # filesystem (tmpfs), where the hard-link merge below fails with EXDEV.
+    export DESTDIR="$PWD/staging$FFBUILD_DESTDIR"
     ninja install
 
     if [[ $TARGET == win* ]]; then
@@ -34,13 +36,7 @@ ffbuild_dockerbuild() {
         return -1
     fi
 
-    # LOCAL DEVIATION from upstream FFmpeg-Builds:
-    #   upstream uses `cp -al` (hard links), which assumes /tmp/staging and the
-    #   build prefix live on the same filesystem (true inside the build
-    #   container). On a normal host /tmp is tmpfs, so hard-linking fails with
-    #   EXDEV ("Invalid cross-device link"). A plain recursive copy is
-    #   equivalent apart from disk/time cost.
-    cp -a "$DESTDIR"/. "$FFBUILD_DESTDIR"
+    cp -al "$DESTDIR"/. "$FFBUILD_DESTDIR"
     rm -rf "$DESTDIR"
     unset DESTDIR
 
