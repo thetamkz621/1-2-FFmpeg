@@ -154,11 +154,10 @@ APT_CORE=(
     unzip zip tar xz-utils zstd p7zip-full libarchive-tools
     xxd
     libtool libltdl-dev libtool-bin
-    ninja-build
     python3 python3-dev python3-pip python3-venv python3-setuptools
     python-is-python3
-    flex bison gperf gawk
-    libxml2-utils texinfo help2man groff
+    flex bison gawk
+    libxml2-utils help2man
     rsync jq subversion mercurial
     clang llvm lld
     libc6-dev zlib1g-dev libssl-dev
@@ -198,7 +197,7 @@ FFBUILD_BT_OCAML_COMPILER="${FFBUILD_BT_OCAML_COMPILER:-ocaml-base-compiler.4.14
 # ------------------------------------------------------------- check mode -----
 # autoconf / automake / cmake 不在此列：它们可能是 setup 自己构建的托管版本，
 # 由下面的 "build tools" 表按版本下限判定；meson 由 venv 提供，也不在系统工具之列。
-REQUIRED_TOOLS=(gcc g++ make ninja pkg-config git patch svn tar xz zip libtoolize python3 gen-implib git-mini-clone retry-tool)
+REQUIRED_TOOLS=(gcc g++ make pkg-config git patch svn tar xz zip libtoolize python3 gen-implib git-mini-clone retry-tool)
 OPTIONAL_TOOLS=(clang cargo rustc node 7z xxd gperf bison flex ragel itstool help2man)
 
 do_check() {
