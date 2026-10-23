@@ -34,7 +34,7 @@ apt 安装——gcc/g++/clang、autoconf/automake、cmake/meson、python3 及常
 ./build.sh 目标 变体 [附加项 [附加项] [附加项] ...]
 ```
 
-成功后产物位于 `artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>].tar.xz`。
+成功后产物位于 `artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器>-<日期>.tar.xz`。
 
 ### 目标、变体与附加项
 
@@ -65,14 +65,15 @@ apt 安装——gcc/g++/clang、autoconf/automake、cmake/meson、python3 及常
 ### 编译器
 
 ```bash
-./build.sh linux64 gpl                              # 默认使用宿主 gcc/g++
-FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl   # 对齐 glibc 2.28 基线（未验证）
-CC=clang CXX=clang++ ./build.sh linux64 gpl          # 替换编译器
+FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
+FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # 对齐 glibc 2.28 基线（未验证）
 ```
 
 > [!NOTE]
-> `host`（默认）使用宿主 `gcc`/`g++`；`ctng` 使用本地构建的 crosstool-ng 工具链，需先运行
-> `./native/setup.sh --with-ctng`，目前未验证。`FFBUILD_CC` / `CC`（以及 `CXX`/`LD`/`AR` 等）用于替换编译器。
+> `host`（默认）按 `cc` → `gcc` → `clang` 探测，`CXX` 跟随同一家族；`clang` / `gcc` 只设置宿主
+> 工具链的默认值；`ctng` 使用本地构建的 crosstool-ng 工具链（目前未验证），需先运行
+> `./native/setup.sh --with-ctng`。`FFBUILD_CC` / `CC`（以及 `CXX`/`LD`/`AR` 等）可覆盖。
 > 追加 Flag 用 `FFBUILD_EXTRA_CFLAGS`、`FFBUILD_EXTRA_LDFLAGS`。查看最终配置：
 > `source native/env.sh && ffbuild_env_dump`；完整变量表见 `native/env.sh` 顶部注释。
 

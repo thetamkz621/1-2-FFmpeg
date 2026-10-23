@@ -34,7 +34,7 @@ usual CLI tools — and builds the ones the distro is too old for into `.buildto
 ./build.sh target variant [addin [addin] [addin] ...]
 ```
 
-On success, the resulting archive will be in `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>].tar.xz`.
+On success, the resulting archive will be in `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler>-<date>.tar.xz`.
 
 ### Targets, Variants and Addins
 
@@ -65,16 +65,17 @@ All of those can be optionally combined with any combination of addins:
 ### Compiler
 
 ```bash
-./build.sh linux64 gpl                              # host gcc/g++, default
-FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl   # glibc 2.28 baseline (unverified)
-CC=clang CXX=clang++ ./build.sh linux64 gpl          # replace the compiler
+FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
+FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # glibc 2.28 baseline (unverified)
 ```
 
 > [!NOTE]
-> `host` (default) uses the system `gcc`/`g++`; `ctng` uses a locally built crosstool-ng
-> toolchain and needs `./native/setup.sh --with-ctng` first — untested so far. `FFBUILD_CC` / `CC` (and
-> `CXX`/`LD`/`AR`/...) replace the compiler. Extra flags: `FFBUILD_EXTRA_CFLAGS`,
-> `FFBUILD_EXTRA_LDFLAGS`. See the resolved configuration with
+> `host` (default) probes `cc`, then `gcc`, then `clang`, with `CXX` following the same family.
+> `clang` / `gcc` only set the host toolchain's defaults, and `ctng` uses a locally built
+> crosstool-ng toolchain — untested so far — and needs `./native/setup.sh --with-ctng` first.
+> `FFBUILD_CC` / `CC` (and `CXX`/`LD`/`AR`/...) override the choice. Extra flags:
+> `FFBUILD_EXTRA_CFLAGS`, `FFBUILD_EXTRA_LDFLAGS`. See the resolved configuration with
 > `source native/env.sh && ffbuild_env_dump`; the full variable list is documented at the
 > top of `native/env.sh`.
 

@@ -8,17 +8,23 @@
 #
 # ---------------------------------------------------------------- contract ----
 # Toolchain selection
-#   FFBUILD_TOOLCHAIN_MODE host (default) | ctng
+#   FFBUILD_TOOLCHAIN_MODE host (default) | clang | gcc | ctng
+#                          host: auto-detect (cc -> gcc -> clang)
+#                          clang/gcc: host toolchain, default to that compiler
+#                          ctng: cross gcc toolchain
 #   FFBUILD_CTNG_ROOT      ct-ng toolchain root    (ctng mode, default
 #                          $FFBUILD_ROOT/ctng)
 #   FFBUILD_TOOLCHAIN_TRIPLE
 #                          GNU triple override   (default: derived for host,
 #                          x86_64-ffbuild-linux-gnu for ctng)
+#   FFBUILD_BUILD_DATE     date used in the artifact name (default YYYYMMDD)
+#
+#   FFBUILD_COMPILER is *derived* (clang|gcc|other) from the resolved CC.
 #
 #   NOTE: FFBUILD_TOOLCHAIN itself is *derived* and exported for compatibility
 #   with ~45 upstream stage scripts that pass it as `--host=...`. Setting it to
 #   "host"/"ctng" selects the mode; any other value is taken as an explicit
-#   triple override.
+#   triple override. `clang`/`gcc` there is rejected: use TOOLCHAIN_MODE.
 #
 # Compiler override (REPLACE semantics)
 #   FFBUILD_CC / FFBUILD_CXX / FFBUILD_LD / FFBUILD_AR / FFBUILD_RANLIB /
@@ -132,7 +138,10 @@ _resolve_flags() {
 }
 
 # ------------------------------------------------------------- toolchain ------
-# 1) Decide the toolchain *mode*.
+# 1) Decide the toolchain *mode*: host (auto), clang, gcc, or ctng.
+#    clang/gcc are shorthands for "host toolchain, default to that compiler";
+#    they only seed the defaults below, so an explicit FFBUILD_CC / CC still wins.
+#    FFBUILD_TOOLCHAIN keeps its old meaning (host/ctng or an explicit triple).
 FFBUILD_TOOLCHAIN_MODE="${FFBUILD_TOOLCHAIN_MODE:-}"
 if [[ -z "$FFBUILD_TOOLCHAIN_MODE" ]]; then
     case "${FFBUILD_TOOLCHAIN:-}" in
@@ -141,11 +150,24 @@ if [[ -z "$FFBUILD_TOOLCHAIN_MODE" ]]; then
         *)       FFBUILD_TOOLCHAIN_MODE=host ;;
     esac
 fi
+case "$FFBUILD_TOOLCHAIN_MODE" in
+host|clang|gcc|ctng) ;;
+*)
+    echo "native/env.sh: unknown FFBUILD_TOOLCHAIN_MODE='$FFBUILD_TOOLCHAIN_MODE' (host|clang|gcc|ctng)" >&2
+    return 1 2>/dev/null || exit 1
+    ;;
+esac
 
 # 2) An explicit triple may be supplied via FFBUILD_TOOLCHAIN (legacy meaning).
-if [[ -n "${FFBUILD_TOOLCHAIN:-}" && "$FFBUILD_TOOLCHAIN" != host && "$FFBUILD_TOOLCHAIN" != ctng ]]; then
-    FFBUILD_TOOLCHAIN_TRIPLE="$FFBUILD_TOOLCHAIN"
-fi
+#    clang/gcc there is now a likely mistake: that variable is the triple.
+case "${FFBUILD_TOOLCHAIN:-}" in
+clang|gcc)
+    echo "native/env.sh: FFBUILD_TOOLCHAIN is the host triple; use FFBUILD_TOOLCHAIN_MODE=$FFBUILD_TOOLCHAIN to pick the compiler" >&2
+    return 1 2>/dev/null || exit 1
+    ;;
+""|host|ctng) ;;
+*) FFBUILD_TOOLCHAIN_TRIPLE="$FFBUILD_TOOLCHAIN" ;;
+esac
 
 _ffbuild_def_cc="gcc"
 _ffbuild_def_cxx="g++"
@@ -155,11 +177,25 @@ _ffbuild_def_ranlib="ranlib"
 _ffbuild_def_nm="nm"
 _ffbuild_def_strip="strip"
 
+# Report the compiler family from the driver itself; used for defaults, the
+# -latomic decision and the env dump.
+_ffbuild_cc_kind() {
+    local macros version
+    macros="$("$1" -E -dM - </dev/null 2>/dev/null || true)"
+    case "$macros" in
+        *__clang__*) echo clang; return 0 ;;
+        *__GNUC__*)  echo gcc;   return 0 ;;
+    esac
+    # Fallback for drivers that cannot preprocess (or are wrappers).
+    version="$("$1" --version 2>/dev/null || true)"
+    case "$version" in
+        *clang*|*Clang*) echo clang ;;
+        *gcc*|*GCC*|*Free*Software*Foundation*) echo gcc ;;
+        *) echo other ;;
+    esac
+}
+
 case "$FFBUILD_TOOLCHAIN_MODE" in
-host)
-    # No tool-name prefix: user compiler overrides (CC=clang) must win.
-    FFBUILD_CROSS_PREFIX=""
-    ;;
 ctng)
     FFBUILD_TOOLCHAIN_TRIPLE="${FFBUILD_TOOLCHAIN_TRIPLE:-x86_64-ffbuild-linux-gnu}"
     FFBUILD_CROSS_PREFIX="${FFBUILD_TOOLCHAIN_TRIPLE}-"
@@ -173,8 +209,35 @@ ctng)
     _ffbuild_def_strip="${FFBUILD_CROSS_PREFIX}strip"
     ;;
 *)
-    echo "native/env.sh: unknown FFBUILD_TOOLCHAIN_MODE='$FFBUILD_TOOLCHAIN_MODE' (host|ctng)" >&2
-    return 1 2>/dev/null || exit 1
+    FFBUILD_CROSS_PREFIX=""
+    # Only seed defaults when the caller did not pick a compiler. clang/gcc
+    # modes are explicit; host mode mirrors meson/cmake: cc first, then gcc,
+    # then clang. CXX follows the same family so the drivers are not mixed.
+    if [[ -z "${FFBUILD_CC:-}" && -z "${_FFBUILD_ENV_SNAP_CC:-}" ]]; then
+        case "$FFBUILD_TOOLCHAIN_MODE" in
+        clang) _ffbuild_def_cc=clang; _ffbuild_def_cxx=clang++ ;;
+        gcc)   _ffbuild_def_cc=gcc;   _ffbuild_def_cxx=g++ ;;
+        *)
+            for _cand in cc gcc clang; do
+                command -v "$_cand" >/dev/null 2>&1 || continue
+                _ffbuild_def_cc="$_cand"
+                case "$(_ffbuild_cc_kind "$_cand")" in
+                clang)
+                    if command -v clang++ >/dev/null 2>&1; then _ffbuild_def_cxx=clang++
+                    else _ffbuild_def_cxx=c++; fi
+                    ;;
+                gcc)
+                    if command -v g++ >/dev/null 2>&1; then _ffbuild_def_cxx=g++
+                    else _ffbuild_def_cxx=c++; fi
+                    ;;
+                *) _ffbuild_def_cxx=c++ ;;
+                esac
+                break
+            done
+            unset _cand
+            ;;
+        esac
+    fi
     ;;
 esac
 
@@ -189,6 +252,41 @@ export AR="$(_ffbuild_pick FFBUILD_AR     "$_FFBUILD_ENV_SNAP_AR"     "$_ffbuild
 export RANLIB="$(_ffbuild_pick FFBUILD_RANLIB "$_FFBUILD_ENV_SNAP_RANLIB" "$_ffbuild_def_ranlib")"
 export NM="$(_ffbuild_pick FFBUILD_NM     "$_FFBUILD_ENV_SNAP_NM"     "$_ffbuild_def_nm")"
 export STRIP="$(_ffbuild_pick FFBUILD_STRIP "$_FFBUILD_ENV_SNAP_STRIP" "$_ffbuild_def_strip")"
+
+# Fail early instead of letting every stage report "command not found".
+for _t in CC CXX; do
+    _v="${!_t}"
+    if ! command -v "$_v" >/dev/null 2>&1; then
+        echo "native/env.sh: $_t='$_v' was not found in PATH" >&2
+        echo "  install it, set $_t, or pick FFBUILD_TOOLCHAIN_MODE=host|clang|gcc" >&2
+        return 1 2>/dev/null || exit 1
+    fi
+done
+unset _t _v
+
+FFBUILD_COMPILER="$(_ffbuild_cc_kind "$CC")"
+export FFBUILD_COMPILER
+
+# If the caller forced CC but not CXX, keep the two drivers in the same family
+# instead of pairing clang with the mode's default g++ (or vice versa).
+if [[ -z "${FFBUILD_CXX:-}" && -z "${_FFBUILD_ENV_SNAP_CXX:-}" ]]; then
+    case "$FFBUILD_COMPILER:$CXX" in
+    clang:clang++) ;;
+    gcc:g++) ;;
+    clang:*)
+        if command -v clang++ >/dev/null 2>&1; then CXX=clang++; export CXX; fi ;;
+    gcc:*)
+        if command -v g++ >/dev/null 2>&1; then CXX=g++; export CXX; fi ;;
+    esac
+fi
+
+# A mode that only seeded defaults must not claim a compiler the caller overrode.
+case "$FFBUILD_TOOLCHAIN_MODE:$FFBUILD_COMPILER" in
+clang:clang|gcc:gcc|ctng:gcc) ;;
+clang:*|gcc:*)
+    echo "note: FFBUILD_TOOLCHAIN_MODE=$FFBUILD_TOOLCHAIN_MODE was overridden by CC=$CC ($FFBUILD_COMPILER)" >&2
+    ;;
+esac
 
 # 4) Derive FFBUILD_TOOLCHAIN (the GNU triple used as `--host` by stage scripts).
 if [[ -n "${FFBUILD_TOOLCHAIN_TRIPLE:-}" ]]; then
@@ -276,6 +374,9 @@ export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-x86_64-unknown-linux-gnu}"
 # FFmpeg's --extra-version suffix. Unset or empty keeps upstream's default
 # behaviour, i.e. the build date in YYYYMMDD form.
 export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
+# Date put into the artifact filename (together with the compiler). Override for
+# reproducible names; it is deliberately independent of --extra-version.
+export FFBUILD_BUILD_DATE="${FFBUILD_BUILD_DATE:-$(date +%Y%m%d)}"
 # Libraries appended *after* every library on FFmpeg's link line (--extra-libs).
 # This position matters: a library that only satisfies references coming from the
 # dependency archives has to appear after them, otherwise Debian's default
@@ -298,12 +399,10 @@ export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
 #            hosts whose compiler has no libatomic.so (EL8's gcc-toolset before
 #            gcc-toolset-14-libatomic-devel), where gcc does not need it at all.
 export FFBUILD_EXTRA_LIBS="${FFBUILD_EXTRA_LIBS--lm -lstdc++}"
-case "$CC" in
-    *clang*)
-        [[ "$FFBUILD_EXTRA_LIBS" == *-latomic* ]] ||
-            FFBUILD_EXTRA_LIBS="$FFBUILD_EXTRA_LIBS -latomic"
-        ;;
-esac
+if [[ "$FFBUILD_COMPILER" == clang ]]; then
+    [[ "$FFBUILD_EXTRA_LIBS" == *-latomic* ]] ||
+        FFBUILD_EXTRA_LIBS="$FFBUILD_EXTRA_LIBS -latomic"
+fi
 # Both descriptors are generated into the repo (see ffbuild_write_toolchain_files
 # below) so no root-owned copy under / is needed.  Stage scripts reach them
 # through these variables.
@@ -644,6 +743,7 @@ prefix         : $FFBUILD_PREFIX
 destdir        : $FFBUILD_DESTDIR
 destprefix     : $FFBUILD_DESTPREFIX
 toolchain mode : $FFBUILD_TOOLCHAIN_MODE
+compiler       : $FFBUILD_COMPILER ($CC / $CXX)
 --host triple  : $FFBUILD_TOOLCHAIN
 cross prefix   : '${FFBUILD_CROSS_PREFIX}'
 jobs           : $FFBUILD_JOBS

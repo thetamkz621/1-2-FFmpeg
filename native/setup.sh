@@ -106,6 +106,8 @@ tool_hint() {
         ocaml)      install_hint "ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev" \
                                  "ocaml ocaml-findlib ocaml-ocamlbuild" \
                                  "ocaml ocaml-findlib ocamlbuild" ;;
+        clang)      install_hint clang clang clang ;;
+        libatomic)  install_hint "libatomic1 gcc" libatomic gcc ;;
         *)          echo "install it with your package manager (README §2.1)" ;;
     esac
 }
@@ -254,6 +256,22 @@ do_check() {
         printf '  [MISSING] %s\n              %s\n' "$1" "$2"
         [[ "${3:-}" == optional ]] || rt_blocking=1
     }
+
+    # 编译器由 FFBUILD_TOOLCHAIN_MODE 选择（host 自动探测）；这里只报告解析结果。
+    if command -v "$CC" >/dev/null 2>&1 && command -v "$CXX" >/dev/null 2>&1; then
+        rt_ok "compiler $FFBUILD_COMPILER ($CC / $CXX)"
+    else
+        rt_missing "compiler $FFBUILD_TOOLCHAIN_MODE" "$(tool_hint "${FFBUILD_COMPILER:-clang}")"
+    fi
+    if [[ "$FFBUILD_COMPILER" == clang ]]; then
+        _libatomic="$("$CC" -print-file-name=libatomic.so 2>/dev/null || true)"
+        if [[ "$_libatomic" == /* && -e "$_libatomic" ]]; then
+            rt_ok "libatomic (clang)     $_libatomic"
+        else
+            rt_missing "libatomic (clang)     rubberband 需要 -latomic" "$(tool_hint libatomic)"
+        fi
+        unset _libatomic
+    fi
 
     if perl -MTime::Piece -e1 2>/dev/null; then
         rt_ok "perl(Time::Piece)      openssl"
