@@ -497,92 +497,34 @@ fi
 export FFBUILD_NO_PROXY
 
 # ---------------------------------------------------- build tools (managed) ---
-# 构建器版本下限见 native/buildtools.lock；不满足下限的工具由 native/setup.sh
-# 装进 $FFBUILD_BUILDTOOLS_PREFIX（默认 <repo>/.buildtools，仓库内、不入库）。
-#
-# 策略是“只补不足”，因此这里只做判定，不做版本替换：
-#   * 系统版本 >= 下限 → 托管版本完全不进 PATH（automake 例外：仍追加，
-#     只为提供 automake-1.18 / aclocal-1.18 这两个版本名）；
-#   * 系统版本 <  下限 → 托管版本的 bin 前置；
-#   * python           → 构建专用 venv 始终前置：它是构建唯一的解释器，
-#     既提供 meson，也提供 jsonschema/jinja2 这些非标准库模块。
+# 构建工具全部源码自建于 $FFBUILD_BUILDTOOLS_PREFIX/prefix（配方见
+# native/buildtools.d/，驱动见 native/buildtools.sh）。该前缀只放 bin/ 与 share/，
+# 不提供任何 .pc，也不进 PKG_CONFIG_LIBDIR —— 所以依赖构建看到的库永远只有
+# $FFBUILD_PREFIX 那一套，这里也就不需要"系统版本够不够"的探测。
 FFBUILD_BUILDTOOLS_PREFIX="${FFBUILD_BUILDTOOLS_PREFIX:-$FFBUILD_REPO_ROOT/.buildtools}"
 export FFBUILD_BUILDTOOLS_PREFIX
-# shellcheck source=native/buildtools.lock
-if [[ -f "$FFBUILD_REPO_ROOT/native/buildtools.lock" ]]; then
-    source "$FFBUILD_REPO_ROOT/native/buildtools.lock"
-fi
+FFBUILD_BUILDTOOLS_BIN="$FFBUILD_BUILDTOOLS_PREFIX/prefix/bin"
+export FFBUILD_BUILDTOOLS_BIN
 
-_ffbuild_ver_ge() {  # $1 >= $2 (version sort)
-    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | sed -n '1p')" == "$2" ]]
-}
 _ffbuild_path_prepend() {
     [[ -d "$1" ]] || return 0
     case ":$PATH:" in *":$1:"*) ;; *) PATH="$1:$PATH" ;; esac
 }
-_ffbuild_path_append() {
-    [[ -d "$1" ]] || return 0
-    case ":$PATH:" in *":$1:"*) ;; *) PATH="$PATH:$1" ;; esac
-}
 
-# 托管目录（变量名沿用旧称，便于单独覆盖某个工具）
-FFBUILD_AUTOCONF_PREFIX="${FFBUILD_AUTOCONF_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/autoconf-${FFBUILD_BT_INSTALL_autoconf:-2.73}}"
-FFBUILD_AUTOMAKE_PREFIX="${FFBUILD_AUTOMAKE_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/automake-${FFBUILD_BT_INSTALL_automake:-1.18.1}}"
-FFBUILD_CMAKE_PREFIX="${FFBUILD_CMAKE_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/cmake-${FFBUILD_BT_INSTALL_cmake:-3.28.3}}"
-FFBUILD_GETTEXT_PREFIX="${FFBUILD_GETTEXT_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/gettext-${FFBUILD_BT_INSTALL_gettext:-0.22.5}}"
-FFBUILD_NASM_PREFIX="${FFBUILD_NASM_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/nasm-${FFBUILD_BT_INSTALL_nasm:-2.16.03}}"
-FFBUILD_YASM_PREFIX="${FFBUILD_YASM_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/yasm-${FFBUILD_BT_INSTALL_yasm:-1.3.0}}"
+# 自建工具永远排在发行版之前：用哪一套只由这里决定，不做版本比较。
+_ffbuild_path_prepend "$FFBUILD_BUILDTOOLS_BIN"
+if [[ -d "$FFBUILD_BUILDTOOLS_PREFIX/prefix/share/aclocal" ]]; then
+    ACLOCAL_PATH="$FFBUILD_BUILDTOOLS_PREFIX/prefix/share/aclocal${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
+    export ACLOCAL_PATH
+fi
+
+# 构建期 Python 只有一个来源：venv（meson + jsonschema + jinja2）。它同时是
+# python3，因此 venv/bin 必须在 PATH 最前。
 FFBUILD_PYTHON_PREFIX="${FFBUILD_PYTHON_PREFIX:-$FFBUILD_BUILDTOOLS_PREFIX/venv}"
-export FFBUILD_AUTOCONF_PREFIX FFBUILD_AUTOMAKE_PREFIX FFBUILD_CMAKE_PREFIX \
-       FFBUILD_GETTEXT_PREFIX FFBUILD_PYTHON_PREFIX \
-       FFBUILD_NASM_PREFIX FFBUILD_YASM_PREFIX
-
-_ac_cur="$(autoconf --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
-if [[ -z "$_ac_cur" ]] || ! _ffbuild_ver_ge "$_ac_cur" "${FFBUILD_BT_MIN_autoconf:-2.73}"; then
-    _ffbuild_path_prepend "$FFBUILD_AUTOCONF_PREFIX/bin"
-fi
-
-_cm_cur="$(cmake --version 2>/dev/null | sed -n '1p' | awk '{print $3}')" || true
-if [[ -z "$_cm_cur" ]] || ! _ffbuild_ver_ge "$_cm_cur" "${FFBUILD_BT_MIN_cmake:-3.28}"; then
-    _ffbuild_path_prepend "$FFBUILD_CMAKE_PREFIX/bin"
-fi
-
-# autopoint 提供 gettext 的构建基础设施；版本不足会让 zvbi 的 autoreconf 直接失败
-_ap_cur="$(autopoint --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
-if [[ -z "$_ap_cur" ]] || ! _ffbuild_ver_ge "$_ap_cur" "${FFBUILD_BT_MIN_gettext:-0.21}"; then
-    _ffbuild_path_prepend "$FFBUILD_GETTEXT_PREFIX/bin"
-fi
-
-# x86 汇编器：FFmpeg 要求 nasm >= 2.13（x264 同样），EL8 的 nasm 在 CRB 而不是
-# base/EPEL；yasm 保留为备选（老版本 FFmpeg 与 win* 目标仍可能用它）。
-_nasm_cur="$(nasm --version 2>/dev/null | sed -n '1p' | awk '{print $3}')" || true
-if [[ -z "$_nasm_cur" ]] || ! _ffbuild_ver_ge "$_nasm_cur" "${FFBUILD_BT_MIN_nasm:-2.13}"; then
-    _ffbuild_path_prepend "$FFBUILD_NASM_PREFIX/bin"
-fi
-_yasm_cur="$(yasm --version 2>/dev/null | sed -n '1p' | awk '{print $2}')" || true
-if [[ -z "$_yasm_cur" ]] || ! _ffbuild_ver_ge "$_yasm_cur" "${FFBUILD_BT_MIN_yasm:-1.3.0}"; then
-    _ffbuild_path_prepend "$FFBUILD_YASM_PREFIX/bin"
-fi
-
-# automake 双轨：裸名看下限，版本名（gnulib）永远要 1.18。
-# 是否介入由“版本名是否存在”决定，而不是系统版本号：Arch 的 automake 1.19 只提供
-# automake-1.19，裸名完全够用、libiconv 要的 automake-1.18 却没有。
-_am_cur="$(automake --version 2>/dev/null | sed -n '1p' | awk '{print $NF}')" || true
-_am_major="${FFBUILD_BT_INSTALL_automake:-1.18.1}"
-_am_major="${_am_major%.*}"
-_am_bin="$FFBUILD_AUTOMAKE_PREFIX/bin"
-if [[ -d "$_am_bin" ]] && ! command -v "automake-$_am_major" >/dev/null 2>&1; then
-    if [[ -n "$_am_cur" ]] && _ffbuild_ver_ge "$_am_cur" "${FFBUILD_BT_MIN_automake:-1.16.3}"; then
-        _ffbuild_path_append "$_am_bin"
-    else
-        _ffbuild_path_prepend "$_am_bin"
-    fi
-fi
-
+export FFBUILD_PYTHON_PREFIX
 if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/python3" ]]; then
     _ffbuild_path_prepend "$FFBUILD_PYTHON_PREFIX/bin"
 fi
-unset _ac_cur _cm_cur _am_cur _am_major _am_bin _ap_cur _nasm_cur _yasm_cur
 export PATH
 
 # -------------------------------------------------------------- git env -------
