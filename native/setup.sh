@@ -807,6 +807,15 @@ echo "  $FFBUILD_ROOT"
 # util/run_stage.sh exports a throwaway one for the stage process tree only.
 
 # ---------------------------------------------------------------- rust --------
+# CARGO_HOME / RUSTUP_HOME point into .buildtools (native/env.sh), and the
+# cargo/rustc on PATH are rustup *proxies* that resolve the toolchain through
+# RUSTUP_HOME.  A proxy that exists but cannot run is worse than no rust at all:
+# it passes a "command -v" test and then fails inside the build.  Ask the tools
+# to actually run instead of trusting PATH.  Defined outside the --with-rust
+# branch: the "rust absent" hints below use them too.
+rust_works() { command -v cargo >/dev/null 2>&1 && cargo --version >/dev/null 2>&1; }
+cargo_c_works() { command -v cargo-cinstall >/dev/null 2>&1 && cargo-cinstall --version >/dev/null 2>&1; }
+
 if [[ "$WITH_RUST" -eq 1 ]]; then
     echo "== preparing rust toolchain (rav1e / librsvg) =="
     # env.sh already pointed CARGO_HOME/RUSTUP_HOME into .buildtools. Keep them
@@ -840,20 +849,41 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
         )
     }
 
+    # cargo-c alone is not enough: it is a standalone binary and runs fine even
+    # when the toolchain behind the cargo proxy is gone, so both have to work.
     rust_ok=0
-    had_cargo=0
-    if command -v cargo-cinstall >/dev/null 2>&1; then
+    if rust_works && cargo_c_works; then
         echo "note: cargo-c already present: $(command -v cargo-cinstall)"
         rust_ok=1
-    elif command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
+    elif rust_works; then
         echo "note: using the rust already on PATH: $(rustc --version 2>/dev/null | sed -n 1p)"
-        had_cargo=1
         if cargo_c_install; then rust_ok=1; fi
     fi
 
     if (( ! rust_ok )); then
+        # Prefer rustup from PATH, but fall back to the host cargo home: a shell
+        # that never sourced ~/.cargo/env has no rustup on PATH even though the
+        # toolchain is right there.
         rustup_bin="$(command -v rustup || true)"
-        if [[ -z "$rustup_bin" ]]; then
+        if [[ -z "$rustup_bin" && -x "$FFBUILD_HOST_CARGO_HOME/bin/rustup" ]]; then
+            rustup_bin="$FFBUILD_HOST_CARGO_HOME/bin/rustup"
+        fi
+        # The repo already carries its own CARGO_HOME/RUSTUP_HOME, so a toolchain
+        # that lives in the user's ~/.rustup is invisible to the proxies until it
+        # is linked in.  Linking costs nothing and keeps the build self-contained,
+        # so prefer it over downloading a second toolchain.
+        host_tc=""
+        for _tc in "$FFBUILD_HOST_RUSTUP_HOME"/toolchains/*; do
+            [[ -x "$_tc/bin/rustc" ]] && host_tc="$_tc" && break
+        done
+        unset _tc
+
+        if [[ -n "$host_tc" && -n "$rustup_bin" ]]; then
+            echo "note: linking host toolchain $(basename "$host_tc") into $FFBUILD_RUSTUP_HOME"
+            RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" toolchain link ffbuild-host "$host_tc" || \
+                note_failure "rust (toolchain link)"
+            RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" default ffbuild-host >/dev/null 2>&1 || true
+        elif [[ -z "$rustup_bin" ]]; then
             echo "== installing rustup into $FFBUILD_RUSTUP_HOME =="
             if ! curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal; then
                 echo "  WARNING: rustup install failed" >&2
@@ -861,26 +891,14 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
             fi
             export PATH="$CARGO_HOME/bin:$PATH"
         else
-            # rustup exists but its toolchain is unusable (or cargo-c could not
-            # be built with the system one). Link the host toolchain into the
-            # repo when possible: no download, and the repo stays self-contained.
-            host_tc=""
-            for _tc in "$FFBUILD_HOST_RUSTUP_HOME"/toolchains/*; do
-                [[ -x "$_tc/bin/rustc" ]] && host_tc="$_tc" && break
-            done
-            unset _tc
-            if [[ -n "$host_tc" && "$had_cargo" -eq 0 ]]; then
-                echo "note: reusing host toolchain $(basename "$host_tc")"
-                RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" toolchain link ffbuild-host "$host_tc" >/dev/null 2>&1 || true
-                RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" default ffbuild-host >/dev/null 2>&1 || true
-            else
-                echo "== installing a rust toolchain into $FFBUILD_RUSTUP_HOME =="
-                RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" toolchain install stable --profile minimal || \
-                    note_failure "rust (toolchain install)"
-                RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" default stable >/dev/null 2>&1 || true
-            fi
+            echo "== installing a rust toolchain into $FFBUILD_RUSTUP_HOME =="
+            RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" toolchain install stable --profile minimal || \
+                note_failure "rust (toolchain install)"
+            RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" default stable >/dev/null 2>&1 || true
         fi
-        if command -v cargo >/dev/null 2>&1 && cargo_c_install; then
+        # The host may already carry cargo-c; do not rebuild it just because the
+        # toolchain had to be linked first.
+        if rust_works && { cargo_c_works || cargo_c_install; }; then
             rust_ok=1
         fi
         if (( ! rust_ok )); then
@@ -889,9 +907,9 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
         fi
     fi
 else
-    if ! command -v cargo >/dev/null 2>&1; then
+    if ! rust_works; then
         echo "note: rust/cargo absent — rav1e and librsvg cannot be built; run ./native/setup.sh --with-rust" >&2
-    elif ! command -v cargo-cinstall >/dev/null 2>&1; then
+    elif ! cargo_c_works; then
         echo "note: cargo-c absent — rav1e cannot be built; run ./native/setup.sh --with-rust" >&2
     fi
 fi
