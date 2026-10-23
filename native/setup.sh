@@ -135,6 +135,11 @@ version_ge() {  # $1 >= $2 (version sort)
 # --------------------------------------------------------------- packages -----
 # Package names target Debian 13 (trixie) and Ubuntu 24.04 (noble); entries that
 # the running distro does not have are filtered out, so one list serves both.
+#
+# Build-time Python (meson / jinja2 / jsonschema) is deliberately absent: it lives
+# in the repo-local venv, which is prepended to PATH for every build (see the
+# "python" section below). Only the interpreter and the venv tooling come from the
+# distro, so a host never ends up with two half-populated Python environments.
 APT_CORE=(
     build-essential gcc g++ binutils make patch
     pkg-config pkgconf
@@ -142,9 +147,9 @@ APT_CORE=(
     unzip zip tar xz-utils zstd p7zip-full libarchive-tools
     nasm yasm xxd
     autoconf automake autopoint gettext libtool libltdl-dev libtool-bin
-    cmake ninja-build meson
+    cmake ninja-build
     python3 python3-dev python3-pip python3-venv python3-setuptools
-    python3-jinja2 python3-jsonschema python-is-python3
+    python-is-python3
     flex bison gperf gawk
     libxml2-utils texinfo help2man groff
     rsync jq subversion mercurial
@@ -172,8 +177,8 @@ if [[ "$PRINT_APT" -eq 1 ]]; then
 fi
 
 # ------------------------------------------------------------- check mode -----
-# autoconf / automake / cmake / meson 不在此列：它们可能是 setup 自己构建的托管版本，
-# 由下面的 "build tools" 表按版本下限判定。
+# autoconf / automake / cmake 不在此列：它们可能是 setup 自己构建的托管版本，
+# 由下面的 "build tools" 表按版本下限判定；meson 由 venv 提供，也不在系统工具之列。
 REQUIRED_TOOLS=(gcc g++ make ninja pkg-config git patch svn tar xz zip nasm yasm libtoolize python3 gen-implib git-mini-clone retry-tool)
 OPTIONAL_TOOLS=(clang cargo rustc node 7z xxd gperf bison flex ragel itstool help2man)
 
