@@ -622,12 +622,18 @@ if [[ -n "${RUSTUP_HOME:-}" && "${RUSTUP_HOME}" != "$FFBUILD_RUSTUP_HOME" ]]; th
 fi
 export CARGO_HOME="$FFBUILD_CARGO_HOME"
 export RUSTUP_HOME="$FFBUILD_RUSTUP_HOME"
-if [[ -d "$CARGO_HOME/bin" ]]; then
+# cargo/rustc 是 rustup 的代理，装在哪里取决于 rustup 是怎么装的：setup 自己下载 rustup
+# 时落在 $CARGO_HOME/bin，而"只把宿主工具链 link 进托管 RUSTUP_HOME"时，代理仍在宿主的
+# ~/.cargo/bin。工具链本身始终来自 $RUSTUP_HOME，所以两处都找一遍。
+for _ffbuild_rust_bin in "$CARGO_HOME/bin" "$FFBUILD_HOST_CARGO_HOME/bin"; do
+    [[ -x "$_ffbuild_rust_bin/cargo" ]] || continue
     case ":$PATH:" in
-        *":$CARGO_HOME/bin:"*) ;;
-        *) export PATH="$CARGO_HOME/bin:$PATH" ;;
+        *":$_ffbuild_rust_bin:"*) ;;
+        *) export PATH="$_ffbuild_rust_bin:$PATH" ;;
     esac
-fi
+    break
+done
+unset _ffbuild_rust_bin
 
 # -------------------------------------------------------------- ocaml --------
 # OCaml is a documented prerequisite (fftw3 generates its codelets with OCaml's
