@@ -14,6 +14,8 @@
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
 #   ./native/setup.sh --no-apt        # skip package installation (host manages its own)
 #   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
+#   ./native/setup.sh --with-tools=a,b   # build these build tools even if only some are missing
+#   ./native/setup.sh --no-managed-tools # do not build tools; use whatever the host provides
 #   ./native/setup.sh --check         # only verify what is present
 #   ./native/setup.sh --print-apt     # print the apt package list and exit
 #
@@ -30,6 +32,8 @@ WITH_CTNG=0
 NO_APT=0
 PRINT_APT=0
 ONLY_BUILDTOOLS=0
+NO_MANAGED_TOOLS=0
+WITH_TOOLS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -40,6 +44,9 @@ while [[ $# -gt 0 ]]; do
     --no-apt)     NO_APT=1 ;;
     --print-apt)  PRINT_APT=1 ;;
     --buildtools-only) ONLY_BUILDTOOLS=1 ;;
+    --no-managed-tools) NO_MANAGED_TOOLS=1 ;;
+    --with-tools=*)      WITH_TOOLS="${1#*=}" ;;
+    --with-tools)        WITH_TOOLS="${2:-}"; shift ;;
     -h|--help)    sed -n '3,19p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "setup.sh: unknown option '$1'" >&2; exit 2 ;;
     esac
@@ -88,7 +95,7 @@ tool_hint() {
         gcc|g++|make|patch|libtoolize)
             install_hint "build-essential" "gcc gcc-c++ make patch libtool" "base-devel" ;;
         ninja)      install_hint ninja-build ninja-build ninja ;;
-        pkg-config) install_hint pkg-config pkgconf-pkg-config pkgconf ;;
+        pkg-config) echo "./native/setup.sh（托管）或 $(install_hint pkg-config pkgconf-pkg-config pkgconf)" ;;
         svn)        install_hint subversion subversion subversion ;;
         nasm)       install_hint nasm nasm nasm ;;
         zip)        install_hint zip zip zip ;;
@@ -142,22 +149,18 @@ version_ge() {  # $1 >= $2 (version sort)
 # distro, so a host never ends up with two half-populated Python environments.
 APT_CORE=(
     build-essential gcc g++ binutils make patch
-    pkg-config pkgconf
     git curl wget ca-certificates
-    unzip zip tar xz-utils zstd p7zip-full libarchive-tools
-    nasm yasm xxd
-    autoconf automake autopoint gettext libtool libltdl-dev libtool-bin
-    cmake ninja-build
+    tar xz-utils p7zip-full libarchive-tools
+    xxd
     python3 python3-dev python3-pip python3-venv python3-setuptools
     python-is-python3
-    flex bison gperf gawk
-    libxml2-utils texinfo help2man groff
-    rsync jq subversion mercurial
+    libxml2-utils
+    subversion mercurial
     clang llvm lld
     libc6-dev zlib1g-dev libssl-dev
 )
 APT_EXTRA=(
-    gtk-doc-tools gobject-introspection itstool ragel indent
+    gtk-doc-tools gobject-introspection itstool
     default-jdk-headless ant
     ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev
     wget2
@@ -176,10 +179,22 @@ if [[ "$PRINT_APT" -eq 1 ]]; then
     exit 0
 fi
 
+# ------------------------------------------------------- managed tool pins -----
+# 这些不是"能自建的工具"，而是版本/来源常量：
+#   * python：只检查版本，不构建（venv 用它）
+#   * meson ：pin 在 venv 里
+#   * opam  ：预编译静态二进制，给缺 OCaml 的宿主兜底
+FFBUILD_BT_SYSTEM_python="${FFBUILD_BT_SYSTEM_python:-3.10}"
+FFBUILD_BT_MESON="${FFBUILD_BT_MESON:-1.12.1}"
+FFBUILD_BT_INSTALL_opam="${FFBUILD_BT_INSTALL_opam:-2.6.1}"
+FFBUILD_BT_URL_opam="${FFBUILD_BT_URL_opam:-https://github.com/ocaml/opam/releases/download/2.6.1/opam-2.6.1-x86_64-linux}"
+FFBUILD_BT_SHA256_opam="${FFBUILD_BT_SHA256_opam:-b533d393a6967150d6ef41cb3d71e147e93ecbabeb59e921aa412c0ae79ebe3d}"
+FFBUILD_BT_OCAML_COMPILER="${FFBUILD_BT_OCAML_COMPILER:-ocaml-base-compiler.4.14.3}"
+
 # ------------------------------------------------------------- check mode -----
 # autoconf / automake / cmake 不在此列：它们可能是 setup 自己构建的托管版本，
 # 由下面的 "build tools" 表按版本下限判定；meson 由 venv 提供，也不在系统工具之列。
-REQUIRED_TOOLS=(gcc g++ make ninja pkg-config git patch svn tar xz zip nasm yasm libtoolize python3 gen-implib git-mini-clone retry-tool)
+REQUIRED_TOOLS=(gcc g++ make git patch svn tar xz python3 gen-implib git-mini-clone retry-tool)
 OPTIONAL_TOOLS=(clang cargo rustc node 7z xxd gperf bison flex ragel itstool help2man)
 
 do_check() {
@@ -195,56 +210,24 @@ do_check() {
             printf '  [MISSING] %-14s %s\n' "$t" "$(tool_hint "$t")"
         fi
     done
-    echo "== build tools (policy: install only when the system is older) =="
-    local ac_cur am_cur cm_cur ac_man am_man cm_man
-    ac_cur="$(probe_version autoconf --version | awk '{print $NF}')"
-    am_cur="$(probe_version automake --version | awk '{print $NF}')"
-    cm_cur="$(probe_version cmake --version | awk '{print $3}')"
-    ac_man="$(probe_version "$FFBUILD_AUTOCONF_PREFIX/bin/autoconf" --version | awk '{print $NF}')"
-    am_man="$(probe_version "$FFBUILD_AUTOMAKE_PREFIX/bin/automake" --version | awk '{print $NF}')"
-    cm_man="$(probe_version "$FFBUILD_CMAKE_PREFIX/bin/cmake" --version | awk '{print $3}')"
-    btv() {  # <name> <system> <min> <managed>
-        local verdict
-        if [[ -n "$2" ]] && version_ge "$2" "$3"; then
-            verdict="system ok"
-        elif [[ -n "$4" ]] && version_ge "$4" "$3"; then
-            verdict="managed ok"
-        else
-            verdict="NEEDS INSTALL"
-        fi
-        printf '  %-9s system=%-8s min=%-7s managed=%-8s %s\n' \
-            "$1" "${2:-none}" "$3" "${4:-none}" "$verdict"
-    }
-    btv autoconf "$ac_cur" "$FFBUILD_BT_MIN_autoconf" "$ac_man"
-    # automake 有两条独立需求：裸名 >= 1.16.3（libxml2），以及 libiconv 写死的
-    # automake-1.18。系统版本比 1.18 新也未必提供那个名字（Arch 1.19 只给 1.19），
-    # 所以这条的判定看的是版本名在不在，而不是版本号大小。
-    local am_major am_name am_verdict
-    am_major="${FFBUILD_BT_INSTALL_automake%.*}"
-    am_name="$(command -v "automake-$am_major" 2>/dev/null || true)"
-    if [[ -z "$am_name" ]]; then
-        am_verdict="NEEDS INSTALL (no automake-$am_major)"
-    elif { [[ -n "$am_cur" ]] && version_ge "$am_cur" "$FFBUILD_BT_MIN_automake"; } ||
-         { [[ -n "$am_man" ]] && version_ge "$am_man" "$FFBUILD_BT_MIN_automake"; }; then
-        am_verdict="ok ($am_name)"
-    else
-        am_verdict="NEEDS INSTALL (bare automake < $FFBUILD_BT_MIN_automake)"
-    fi
-    printf '  %-9s system=%-8s min=%-7s managed=%-8s %s\n' \
-        automake "${am_cur:-none}" "$FFBUILD_BT_MIN_automake" "${am_man:-none}" "$am_verdict"
-    btv cmake    "$cm_cur" "$FFBUILD_BT_MIN_cmake"    "$cm_man"
-    if [[ -z "$cm_man" ]] && { [[ -z "$cm_cur" ]] || ! version_ge "$cm_cur" "$FFBUILD_BT_MIN_cmake"; }; then
-        printf '              -> %s  (or re-run ./native/setup.sh to build %s into .buildtools)\n' \
-            "$(tool_hint cmake)" "$FFBUILD_BT_INSTALL_cmake"
+    echo "== build tools (source-built into $FFBUILD_BUILDTOOLS_PREFIX) =="
+    bt_missing=0
+    if (( NO_MANAGED_TOOLS )); then
+        printf '  %-9s skipped (--no-managed-tools)\n' "(all)"
+    elif ! "$FFBUILD_REPO_ROOT/native/buildtools.sh" --check; then
+        bt_missing=1
+        echo "              -> run ./native/setup.sh to build the missing ones"
     fi
     local py_bin py_ver
     py_bin=""
+    py_ver=""
     for _c in python3.13 python3.12 python3.11 python3.10 python3; do
         command -v "$_c" >/dev/null 2>&1 || continue
         _v="$("$_c" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
         [[ -n "$_v" ]] || continue
         if version_ge "$_v" "$FFBUILD_BT_SYSTEM_python"; then py_bin="$_c"; py_ver="$_v"; break; fi
     done
+    unset _v _c
     if [[ -n "$py_bin" ]]; then
         printf '  %-9s system=%-8s min=%-7s ok (%s)\n' python "$py_ver" "$FFBUILD_BT_SYSTEM_python" "$py_bin"
     else
@@ -368,7 +351,7 @@ do_check() {
     fi
     echo
     ffbuild_env_dump
-    if ((${#missing[@]})) || (( rt_blocking )); then
+    if ((${#missing[@]})) || (( rt_blocking )) || (( ${bt_missing:-0} )); then
         echo
         if ((${#missing[@]})); then
             echo "Missing required tools: ${missing[*]}"
@@ -377,9 +360,8 @@ do_check() {
             echo "Missing runtime prerequisites: see the [MISSING] lines above."
         fi
         echo "  distro packages: install them as shown above (README §2.1), then re-run this check."
-        echo "  managed tools  : if cmake / nasm / yasm / OCaml are the gaps, './native/setup.sh'"
-        echo "                   builds them — failures are explained inline, logs in"
-        echo "                   $FFBUILD_BUILDTOOLS_PREFIX/log/."
+        echo "  build tools    : './native/setup.sh' builds them from source into"
+        echo "                   $FFBUILD_BUILDTOOLS_PREFIX/prefix (logs in .../log/)."
         return 1
     fi
 }
@@ -435,13 +417,24 @@ if [[ "$APT_OK" -eq 1 ]]; then
 fi
 
 # ------------------------------------------------------------ build tools -----
-# 版本下限与来源见 native/buildtools.lock。策略是"只补不足"：系统版本够用就
-# 不装；不够才把对应版本构建进 $FFBUILD_BUILDTOOLS_PREFIX（默认 <repo>/.buildtools）。
-# 该目录属当前用户、位于仓库内、不入库，安装过程不需要 root，也不影响同机其他项目。
-BT_PREFIX="$FFBUILD_BUILDTOOLS_PREFIX"
-BT_JOBS="${FFBUILD_JOBS:-$(nproc 2>/dev/null || echo 4)}"
-mkdir -p "$BT_PREFIX"
+# 构建工具全部源码自建：配方在 native/buildtools.d/，驱动在 native/buildtools.sh。
+# 装进 $FFBUILD_BUILDTOOLS_PREFIX/prefix，只放 bin/ 与 share/，不进 PKG_CONFIG_LIBDIR，
+# 因此这里既不需要版本探测，也不需要给每个工具分目录。
+#
+# 无法"从源码自建"的仍是常量：python（只检查版本，venv 需要它）、meson（pin，
+# 装在 venv 里）、opam（预编译静态二进制，给缺 OCaml 的宿主兜底）。
 
+if (( NO_MANAGED_TOOLS )); then
+    echo "note: --no-managed-tools; 使用宿主自带的构建工具"
+else
+    _bt_args=()
+    [[ -n "${WITH_TOOLS:-}" ]] && _bt_args=(--tool "$WITH_TOOLS")
+    "$FFBUILD_REPO_ROOT/native/buildtools.sh" "${_bt_args[@]}" ||
+        note_failure "build tools (native/buildtools.sh)"
+    unset _bt_args
+fi
+
+# opam 是预编译二进制（不是源码包），所以留在 setup 里下载。
 bt_fetch() {  # <url> <dest> <sha256>
     local url="$1" dest="$2" want="$3" got=""
     if ! curl -fsSL --max-time 300 -o "$dest" "$url" 2>/dev/null &&
@@ -458,164 +451,6 @@ bt_fetch() {  # <url> <dest> <sha256>
         return 1
     fi
 }
-
-bt_unpack() {  # <url> <sha256> -> prints a temp dir containing ./src
-    local tmp
-    # Keep unpacked sources inside the repo: a failed managed build leaves the
-    # tree behind for inspection, and deleting the repo must delete it too.
-    mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/tmp"
-    tmp="$(mktemp -d "$FFBUILD_BUILDTOOLS_PREFIX/tmp/build.XXXXXX")"
-    bt_fetch "$1" "$tmp/src.tar" "$2" || { rm -rf "$tmp"; return 1; }
-    mkdir -p "$tmp/src"
-    tar -xf "$tmp/src.tar" -C "$tmp/src" --strip-components=1 || { rm -rf "$tmp"; return 1; }
-    printf '%s\n' "$tmp"
-}
-
-# Build tools must not inherit the *FFmpeg build* environment: env.sh exports
-# CFLAGS/CXXFLAGS/LDFLAGS pointing at $FFBUILD_PREFIX, whose headers and libs are
-# for the target dependency tree. Feeding them to cmake's bootstrap produced
-# "undefined reference to inflate" (prefix zlib.h, no -lz on the link line).
-bt_clean_env() {  # runs a command without the build's compiler/flag overrides
-    (
-        unset CC CXX LD AR RANLIB NM STRIP
-        unset CFLAGS CXXFLAGS LDFLAGS LDEXEFLAGS CPPFLAGS
-        unset PKG_CONFIG_PATH PKG_CONFIG_LIBDIR ACLOCAL_PATH
-        "$@"
-    )
-}
-
-# 托管构建的输出不再丢进 /dev/null：失败时用户至少能看到最后一屏错误，
-# 完整日志留在 .buildtools/log/ 里（重启后仍在，便于事后排查）。
-bt_logfile() {  # <prefix> -> <prefix 的 basename>.log
-    mkdir -p "$BT_PREFIX/log"
-    printf '%s/log/%s.log' "$BT_PREFIX" "$(basename "$1")"
-}
-
-bt_build_failed() {  # <logfile> <src-dir>
-    echo "  WARNING: build failed" >&2
-    echo "    log:  $1" >&2
-    tail -n 4 "$1" 2>/dev/null | sed 's/^/    | /' >&2
-    echo "    src:  $2 (left for inspection)" >&2
-}
-
-bt_build_configure() {  # <url> <sha256> <prefix> [cflags]
-    local tmp log
-    tmp="$(bt_unpack "$1" "$2")" || return 1
-    log="$(bt_logfile "$3")"
-    if bt_clean_env bash -c 'cd "$1" && CFLAGS="$4" ./configure --prefix="$2" && make -j"$3" && make install' \
-           _ "$tmp/src" "$3" "$BT_JOBS" "${4:-}" >"$log" 2>&1; then
-        rm -rf "$tmp"
-        echo "  ok: $(basename "$3")"
-        return 0
-    fi
-    bt_build_failed "$log" "$tmp/src"
-    return 1
-}
-
-bt_build_cmake() {  # <url> <sha256> <prefix> [extra C++ flags]
-    local tmp log
-    tmp="$(bt_unpack "$1" "$2")" || return 1
-    log="$(bt_logfile "$3")"
-    if bt_clean_env bash -c 'cd "$1" && CXXFLAGS="$4" ./bootstrap --prefix="$2" --parallel="$3" && make -j"$3" && make install' \
-           _ "$tmp/src" "$3" "$BT_JOBS" "${4:-}" >"$log" 2>&1; then
-        rm -rf "$tmp"
-        echo "  ok: $(basename "$3")"
-        return 0
-    fi
-    bt_build_failed "$log" "$tmp/src"
-    return 1
-}
-
-# --------------------------------------------------------------- autoconf -----
-ac_cur="$(probe_version autoconf --version | awk '{print $NF}')"
-ac_man="$(probe_version "$FFBUILD_AUTOCONF_PREFIX/bin/autoconf" --version | awk '{print $NF}')"
-if [[ -n "$ac_cur" ]] && version_ge "$ac_cur" "$FFBUILD_BT_MIN_autoconf"; then
-    echo "note: autoconf $ac_cur >= $FFBUILD_BT_MIN_autoconf"
-elif [[ -n "$ac_man" ]] && version_ge "$ac_man" "$FFBUILD_BT_MIN_autoconf"; then
-    echo "note: managed autoconf $ac_man ready at $FFBUILD_AUTOCONF_PREFIX"
-else
-    echo "== building autoconf $FFBUILD_BT_INSTALL_autoconf into $FFBUILD_AUTOCONF_PREFIX =="
-    bt_build_configure "$FFBUILD_BT_URL_autoconf" "$FFBUILD_BT_SHA256_autoconf" "$FFBUILD_AUTOCONF_PREFIX" ||
-        note_failure autoconf
-fi
-
-# --------------------------------------------------------------- automake -----
-# 两条独立需求：裸名 automake 的图内下限是 1.16.3（libxml2），而 libiconv 的
-# Makefile.devel 写死 automake-1.18 / aclocal-1.18。系统版本比 1.18 新也不等于够用：
-# Arch 的 automake 1.19 只装出 automake-1.19，版本名仍然缺。所以判据是“这个版本名
-# 在 PATH 里存不存在”，不是版本号大小。
-am_cur="$(probe_version automake --version | awk '{print $NF}')"
-am_major="${FFBUILD_BT_INSTALL_automake%.*}"
-am_man="$(probe_version "$FFBUILD_AUTOMAKE_PREFIX/bin/automake" --version | awk '{print $NF}')"
-if [[ -n "$am_man" ]] && version_ge "$am_man" "$am_major"; then
-    echo "note: managed automake $am_man ready at $FFBUILD_AUTOMAKE_PREFIX"
-elif command -v "automake-$am_major" >/dev/null 2>&1; then
-    echo "note: system automake $am_cur provides automake-$am_major"
-else
-    echo "== building automake $FFBUILD_BT_INSTALL_automake into $FFBUILD_AUTOMAKE_PREFIX =="
-    echo "   (system automake is ${am_cur:-absent} and provides no automake-$am_major)"
-    bt_build_configure "$FFBUILD_BT_URL_automake" "$FFBUILD_BT_SHA256_automake" "$FFBUILD_AUTOMAKE_PREFIX" ||
-        note_failure automake
-fi
-
-# ------------------------------------------------------------------ cmake -----
-cm_cur="$(probe_version cmake --version | awk '{print $3}')"
-cm_man="$(probe_version "$FFBUILD_CMAKE_PREFIX/bin/cmake" --version | awk '{print $3}')"
-if [[ -n "$cm_cur" ]] && version_ge "$cm_cur" "$FFBUILD_BT_MIN_cmake"; then
-    echo "note: cmake $cm_cur >= $FFBUILD_BT_MIN_cmake"
-elif [[ -n "$cm_man" ]] && version_ge "$cm_man" "$FFBUILD_BT_MIN_cmake"; then
-    echo "note: managed cmake $cm_man ready at $FFBUILD_CMAKE_PREFIX"
-else
-    echo "== building cmake $FFBUILD_BT_INSTALL_cmake into $FFBUILD_CMAKE_PREFIX (takes a while) =="
-    bt_build_cmake "$FFBUILD_BT_URL_cmake" "$FFBUILD_BT_SHA256_cmake" "$FFBUILD_CMAKE_PREFIX" ||
-        note_failure cmake
-fi
-
-# ----------------------------------------------------------------- gettext -----
-# zvbi 的 configure.ac 声明 AM_GNU_GETTEXT_VERSION([0.21])，autopoint 在版本
-# 不足时会直接拒绝执行（EL8 只有 0.19.8）。
-ap_cur="$(probe_version autopoint --version | awk '{print $NF}')"
-ap_man="$(probe_version "$FFBUILD_GETTEXT_PREFIX/bin/autopoint" --version | awk '{print $NF}')"
-if [[ -n "$ap_cur" ]] && version_ge "$ap_cur" "$FFBUILD_BT_MIN_gettext"; then
-    echo "note: autopoint $ap_cur >= $FFBUILD_BT_MIN_gettext"
-elif [[ -n "$ap_man" ]] && version_ge "$ap_man" "$FFBUILD_BT_MIN_gettext"; then
-    echo "note: managed gettext $ap_man ready at $FFBUILD_GETTEXT_PREFIX"
-else
-    echo "== building gettext $FFBUILD_BT_INSTALL_gettext into $FFBUILD_GETTEXT_PREFIX =="
-    bt_build_configure "$FFBUILD_BT_URL_gettext" "$FFBUILD_BT_SHA256_gettext" "$FFBUILD_GETTEXT_PREFIX" ||
-        note_failure gettext
-fi
-
-# ------------------------------------------------------------------- nasm -----
-# FFmpeg requires nasm >= 2.13 for x86 asm (x264 as well). EL8 ships nasm in CRB
-# (powertools), not in base/EPEL, so an host that never enabled that repo simply
-# has no assembler: FFmpeg then silently drops to portable C and x264 fails.
-nasm_cur="$(probe_version nasm --version | awk '{print $3}')"
-nasm_man="$(probe_version "$FFBUILD_NASM_PREFIX/bin/nasm" --version | awk '{print $3}')"
-if [[ -n "$nasm_cur" ]] && version_ge "$nasm_cur" "$FFBUILD_BT_MIN_nasm"; then
-    echo "note: nasm $nasm_cur >= $FFBUILD_BT_MIN_nasm (already in PATH)"
-elif [[ -n "$nasm_man" ]] && version_ge "$nasm_man" "$FFBUILD_BT_MIN_nasm"; then
-    echo "note: managed nasm $nasm_man ready at $FFBUILD_NASM_PREFIX"
-else
-    echo "== building nasm $FFBUILD_BT_INSTALL_nasm into $FFBUILD_NASM_PREFIX =="
-    bt_build_configure "$FFBUILD_BT_URL_nasm" "$FFBUILD_BT_SHA256_nasm" "$FFBUILD_NASM_PREFIX" ||
-        note_failure nasm
-fi
-
-# ------------------------------------------------------------------- yasm -----
-# Kept alongside nasm: only linux64 + current FFmpeg were validated, and older
-# FFmpeg/win* targets may still prefer yasm.
-yasm_cur="$(probe_version yasm --version | awk '{print $2}')"
-yasm_man="$(probe_version "$FFBUILD_YASM_PREFIX/bin/yasm" --version | awk '{print $2}')"
-if [[ -n "$yasm_cur" ]] && version_ge "$yasm_cur" "$FFBUILD_BT_MIN_yasm"; then
-    echo "note: yasm $yasm_cur >= $FFBUILD_BT_MIN_yasm (already in PATH)"
-elif [[ -n "$yasm_man" ]] && version_ge "$yasm_man" "$FFBUILD_BT_MIN_yasm"; then
-    echo "note: managed yasm $yasm_man ready at $FFBUILD_YASM_PREFIX"
-else
-    echo "== building yasm $FFBUILD_BT_INSTALL_yasm into $FFBUILD_YASM_PREFIX =="
-    bt_build_configure "$FFBUILD_BT_URL_yasm" "$FFBUILD_BT_SHA256_yasm" "$FFBUILD_YASM_PREFIX" "-std=gnu11" ||
-        note_failure yasm
-fi
 
 # ------------------------------------------------------------------ ocaml -----
 # 25-fftw3 builds from git with --enable-maintainer-mode, so its codelets are

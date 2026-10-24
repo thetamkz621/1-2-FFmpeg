@@ -14,9 +14,9 @@ Currently, only the `linux64` target is supported. Upstream's other targets are 
 
 ### Prerequisites
 
-Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root). `setup.sh` installs the
-build prerequisites from apt — gcc/g++/clang, autoconf/automake, cmake/meson, python3 and the
-usual CLI tools — and builds the ones the distro is too old for into `.buildtools/`.
+Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root). `setup.sh` takes only
+the base toolchain from apt (gcc/g++, clang, python3, git and the usual CLI tools) and builds the
+rest — autoconf, automake, cmake, nasm, yasm, gettext and the Python venv — under `.buildtools/`.
 
 `./native/setup.sh --check` prints the required and optional tool list without changing anything.
 

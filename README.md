@@ -14,9 +14,9 @@
 
 ### 前置
 
-Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）。构建前置依赖由 `setup.sh` 通过
-apt 安装——gcc/g++/clang、autoconf/automake、cmake/meson、python3 及常用命令行工具；
-发行版版本过旧的则源码构建进 `.buildtools/`。
+Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）。`setup.sh` 只用 apt 装基础工具链
+（gcc/g++、clang、python3、git 及常用命令行工具），其余——autoconf、automake、cmake、nasm、
+yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。
 
 `./native/setup.sh --check` 只报告所需与可选工具，不改动系统。
 
