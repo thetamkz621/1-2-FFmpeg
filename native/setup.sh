@@ -95,7 +95,7 @@ tool_hint() {
         gcc|g++|make|patch|libtoolize)
             install_hint "build-essential" "gcc gcc-c++ make patch libtool" "base-devel" ;;
         ninja)      install_hint ninja-build ninja-build ninja ;;
-        pkg-config) install_hint pkg-config pkgconf-pkg-config pkgconf ;;
+        pkg-config) echo "./native/setup.sh（托管）或 $(install_hint pkg-config pkgconf-pkg-config pkgconf)" ;;
         svn)        install_hint subversion subversion subversion ;;
         nasm)       install_hint nasm nasm nasm ;;
         zip)        install_hint zip zip zip ;;
@@ -149,7 +149,6 @@ version_ge() {  # $1 >= $2 (version sort)
 # distro, so a host never ends up with two half-populated Python environments.
 APT_CORE=(
     build-essential gcc g++ binutils make patch
-    pkg-config pkgconf
     git curl wget ca-certificates
     unzip zip tar xz-utils zstd p7zip-full libarchive-tools
     xxd
@@ -196,7 +195,7 @@ FFBUILD_BT_OCAML_COMPILER="${FFBUILD_BT_OCAML_COMPILER:-ocaml-base-compiler.4.14
 # ------------------------------------------------------------- check mode -----
 # autoconf / automake / cmake 不在此列：它们可能是 setup 自己构建的托管版本，
 # 由下面的 "build tools" 表按版本下限判定；meson 由 venv 提供，也不在系统工具之列。
-REQUIRED_TOOLS=(gcc g++ make pkg-config git patch svn tar xz zip python3 gen-implib git-mini-clone retry-tool)
+REQUIRED_TOOLS=(gcc g++ make git patch svn tar xz zip python3 gen-implib git-mini-clone retry-tool)
 OPTIONAL_TOOLS=(clang cargo rustc node 7z xxd gperf bison flex ragel itstool help2man)
 
 do_check() {
