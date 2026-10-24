@@ -61,6 +61,8 @@ tool_name() { local b; b="$(basename "$1" .sh)"; echo "${b#??-}"; }
 load_meta() {   # $1 = recipe path；在当前 shell 里设置 BT_* 元数据
     BT_VERSION=""; BT_SHA256=""; BT_COMMIT=""; BT_URL=""; BT_URLS=(); BT_SOURCE=""
     BT_BIN=""; BT_STRIP_COMPONENTS=""
+    # 配方定义的函数在同一个 shell 里会残留到下一个工具，先清掉
+    unset -f bt_deps bt_build bt_check 2>/dev/null || true
     # shellcheck disable=SC1090
     . "$1"
     BT_SOURCE="${BT_SOURCE:-archive}"
@@ -105,6 +107,12 @@ assert_clean_prefix() {
 }
 
 check_binary() {  # $1 = name
+    # 有的工具 --version 返回非零（GNU indent 就是 64），配方可以用 bt_check 自己判定
+    if declare -F bt_check >/dev/null 2>&1; then
+        bt_check >/dev/null 2>&1 && return 0
+        echo "   WARNING: bt_check failed for $1" >&2
+        return 1
+    fi
     local bin="$BT_PREFIX/bin/$BT_BIN"
     if [[ -x "$bin" ]]; then
         "$bin" --version >/dev/null 2>&1 && return 0
@@ -142,6 +150,7 @@ build_one() {
     fi
 
     (
+        set -e
         cd "$src" || exit 1
         # 工具构建只看系统库：依赖前缀（ffbuild/prefix）与它的 .pc 都不该参与
         unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
@@ -157,7 +166,9 @@ build_one() {
     fi
 
     stamp > "$(state_file "$name")"
-    echo "   ok: $BT_PREFIX/bin/$BT_BIN ($("$BT_PREFIX/bin/$BT_BIN" --version 2>/dev/null | head -1))"
+    local _ver=""
+    _ver="$("$BT_PREFIX/bin/$BT_BIN" --version 2>/dev/null | head -1)"
+    echo "   ok: $BT_PREFIX/bin/$BT_BIN${_ver:+ ($_ver)}"
 }
 
 main() {
