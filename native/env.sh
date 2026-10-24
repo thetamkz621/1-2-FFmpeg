@@ -542,7 +542,8 @@ fi
 
 # -------------------------------------------------------------- rust PATH -----
 # rav1e and librsvg build with cargo; librsvg even runs `cargo vendor` during its
-# download step. `native/setup.sh --with-rust` provisions this toolchain.
+# download step. `native/setup.sh` provisions this toolchain; it prefers the host's
+# rustup toolchain and only downloads when there is none.
 #
 # Both homes belong to the build tree, not to the user's account: a build host
 # should not get ~/.cargo or ~/.rustup behind its back, and "delete the repo"
