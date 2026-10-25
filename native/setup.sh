@@ -827,7 +827,7 @@ if ((${#SETUP_FAILURES[@]})); then
     echo
     echo "== setup finished with ${#SETUP_FAILURES[@]} problem(s) =="
     printf '%s\n' "${SETUP_FAILURES[@]}" | sort -u | sed 's/^/  - /'
-    echo "  managed build logs : $BT_PREFIX/log/"
+    echo "  managed build logs : $FFBUILD_BUILDTOOLS_PREFIX/log/"
     echo "  distro packages    : ./native/setup.sh --check  (per-tool command) / README §2.1"
     ffbuild_env_dump
     echo
