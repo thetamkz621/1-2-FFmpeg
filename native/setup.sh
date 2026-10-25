@@ -174,7 +174,14 @@ APT_CORE=(
 APT_EXTRA=(
     # 上游镜像有、当前默认图用不到；--all 时装上
     p7zip-full libarchive-tools xxd libxml2-utils mercurial
-    lld
+    # 上游与 clang/llvm 同组：覆盖率、交叉产物试运行、32 位目标的多架构
+    lcov lld qemu-user gcc-multilib g++-multilib
+    # 自建 libtool 只装 libtool / libtoolize，ltdl 头文件仍由发行版提供
+    libltdl-dev
+    # install-doc 的 HTML 通道；缺了 build.sh 只告警
+    texi2html
+    # 上游装 nodesource 的 nodejs 与 python3-apt；仓库内零引用，保持能力对齐
+    python3-apt nodejs
     gtk-doc-tools gobject-introspection itstool
 )
 
