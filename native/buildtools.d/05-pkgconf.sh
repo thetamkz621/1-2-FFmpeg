@@ -15,7 +15,12 @@ BT_BIN="pkgconf"
 bt_build() {
     ./configure --prefix="$BT_PREFIX" --disable-shared --enable-static
     make -j"$BT_JOBS"
-    install -d "$BT_PREFIX/bin"
+    install -d "$BT_PREFIX/bin" "$BT_PREFIX/share/aclocal"
     install -m755 pkgconf "$BT_PREFIX/bin/pkgconf"
     ln -sf pkgconf "$BT_PREFIX/bin/pkg-config"
+    # pkg.m4 也是 pkg-config 的交付物（PKG_PROG_PKG_CONFIG 等宏）。没跑
+    # make install 就得手动补：纯托管宿主上没有发行版 pkg-config，依赖项目的
+    # autoreconf 只能从这里的 aclocal 目录拿到它（env.sh 已把该目录放进
+    # ACLOCAL_PATH）。
+    install -m644 pkg.m4 "$BT_PREFIX/share/aclocal/pkg.m4"
 }
