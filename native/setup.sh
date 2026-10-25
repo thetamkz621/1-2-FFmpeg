@@ -720,7 +720,17 @@ prepare_rust() {
     # (cargo, rustc) is reused from the host when it works.
     cargo_c_install() {
         (
-            unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH
+            # cargo-c 是宿主工具，应该看系统库。env.sh 的 PKG_CONFIG_LIBDIR 只指向
+            # ffbuild 前缀，而托管 pkgconf 编译进去的默认 pc_path 落在 .buildtools
+            # 里，两者都到不了 /usr 下的 .pc（libssl-dev 的 openssl.pc 就因此找不到）。
+            # 这里显式改指系统的 pkgconfig 目录；多架构目录名从编译器推导，免得
+            # 在 x86_64/aarch64 之间硬编码。
+            _sys_pc="/usr/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
+            _triple="$("${CC:-cc}" -dumpmachine 2>/dev/null || true)"
+            [[ -n "$_triple" ]] && _sys_pc="/usr/lib/$_triple/pkgconfig:$_sys_pc"
+            unset PKG_CONFIG_PATH
+            export PKG_CONFIG_LIBDIR="$_sys_pc"
+            unset _sys_pc _triple
             # 中间产物不放 TMPDIR（可能是 tmpfs）也不放 ~/.cargo：cargo-c 的构建很吃空间。
             mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/tmp" "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target"
             TMPDIR="$FFBUILD_BUILDTOOLS_PREFIX/tmp" \
