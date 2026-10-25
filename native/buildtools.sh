@@ -18,6 +18,7 @@
 #   native/buildtools.sh --tool NAME      只构建 NAME（逗号分隔或重复使用）
 #   native/buildtools.sh --force NAME     强制重建 NAME
 #   native/buildtools.sh --check          只报告缺口，不构建
+#   --keep-going                          一个工具失败后继续构建其余的，最后统一报错
 #   --jobs N                              并行度（默认 nproc）
 #
 # 安装前缀只放 bin/ 与 share/ 之类的纯工具内容：它绝不进入 PKG_CONFIG_LIBDIR，
@@ -37,6 +38,7 @@ export BT_PREFIX BT_JOBS BT_CACHE
 DO_BUILD=1
 DO_CHECK=0
 DO_LIST=0
+KEEP_GOING=0
 WANT=()
 FORCE=()
 
@@ -46,6 +48,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --list)   DO_LIST=1; DO_BUILD=0 ;;
         --check)  DO_CHECK=1; DO_BUILD=0 ;;
+        --keep-going) KEEP_GOING=1 ;;
         --tool)   IFS=, read -r -a _t <<<"${2:-}"; WANT+=("${_t[@]}"); shift ;;
         --force)  FORCE+=("${2:-}"); shift ;;
         --jobs)   BT_JOBS="${2:-}"; export BT_JOBS; shift ;;
@@ -202,6 +205,7 @@ main() {
     fi
 
     local -a list=()
+    local -a failed=()
     if (( ${#WANT[@]} )); then
         list=("${WANT[@]}")
     else
@@ -220,8 +224,21 @@ main() {
             echo "== $name $BT_VERSION (already built)"
             continue
         fi
-        build_one "$recipe"
+        if (( KEEP_GOING )); then
+            # 子 shell 隔离：build_one 内部的 die 只结束这一项，后面的工具照建。
+            if ! ( build_one "$recipe" ); then
+                failed+=("$name")
+                echo "note: $name failed; continuing (--keep-going)" >&2
+            fi
+        else
+            build_one "$recipe"
+        fi
     done
+
+    if ((${#failed[@]})); then
+        echo "buildtools.sh: ${#failed[@]} tool(s) failed: ${failed[*]}" >&2
+        return 1
+    fi
 }
 
 main
