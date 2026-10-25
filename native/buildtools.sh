@@ -154,6 +154,10 @@ build_one() {
         cd "$src" || exit 1
         # 工具构建只看系统库：依赖前缀（ffbuild/prefix）与它的 .pc 都不该参与
         unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH CPPFLAGS CFLAGS CXXFLAGS LDFLAGS
+        # 这些工具都是老 C 代码，gcc >= 15 默认的 gnu23 会把 `f()` 当成 `(void)`，
+        # 直接编不过（texinfo 的 info、unzip 的 gmtime 原型）。统一按 C17 构建；
+        # recipe 需要额外降级标志时自己往 CFLAGS 上追加。
+        export CFLAGS="-O2 -std=gnu17"
         export PATH="$BT_PREFIX/bin:$PATH"
         # shellcheck disable=SC1090
         . "$recipe"
