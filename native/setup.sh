@@ -22,8 +22,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=native/env.sh
-source "$HERE/env.sh"
+# env.sh is sourced only after the distro packages are in place: it aborts when
+# no C compiler can be resolved, and on a bare host that compiler is one of the
+# packages this script installs. See the "package install" section below.
 
 DO_CHECK=0
 DO_ALL=0
@@ -52,10 +53,6 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
-
-if [[ -n "${FFBUILD_IGNORED_CARGO_HOME:-}${FFBUILD_IGNORED_RUSTUP_HOME:-}" ]]; then
-    echo "note: ignoring CARGO_HOME/RUSTUP_HOME from the environment; build caches stay under $FFBUILD_BUILDTOOLS_PREFIX"
-fi
 
 # ---------------------------------------------------------------- sudo --------
 if [[ "$(id -u)" -eq 0 ]]; then
@@ -270,7 +267,8 @@ do_check() {
     if command -v "$CC" >/dev/null 2>&1 && command -v "$CXX" >/dev/null 2>&1; then
         rt_ok "compiler $FFBUILD_COMPILER ($CC / $CXX)"
     else
-        rt_missing "compiler $FFBUILD_TOOLCHAIN_MODE" "$(tool_hint "${FFBUILD_COMPILER:-clang}")"
+        rt_missing "compiler $CC / $CXX (mode $FFBUILD_TOOLCHAIN_MODE)" \
+                   "$(tool_hint "${FFBUILD_TOOLCHAIN_MODE/host/gcc}")"
     fi
     if [[ "$FFBUILD_COMPILER" == clang ]]; then
         _libatomic="$("$CC" -print-file-name=libatomic.so 2>/dev/null || true)"
@@ -329,7 +327,11 @@ do_check() {
                    "apt install ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev | dnf install ocaml ocaml-findlib ocaml-ocamlbuild (num has no rpm) | pacman -S ocaml ocaml-findlib ocamlbuild; setup.sh provisions it through opam when num is missing" ;;
     esac
 
-    cc_major="$(c++ -dumpversion 2>/dev/null | awk -F. '{print $1}')"
+    # pipefail + 缺失的 c++ 会让整条管道返回 127，--check 在裸机上必须先挡住。
+    cc_major=""
+    if command -v c++ >/dev/null 2>&1; then
+        cc_major="$(c++ -dumpversion 2>/dev/null | awk -F. '{print $1}')"
+    fi
     if [[ -n "$cc_major" ]] && (( cc_major >= 9 )); then
         rt_ok "system c++ >= 9        shaderc native_build (found $cc_major)"
     else
@@ -387,17 +389,15 @@ do_check() {
     fi
 }
 
-if [[ "$DO_CHECK" -eq 1 ]]; then
-    do_check
-    exit $?
-fi
-
 # ------------------------------------------------------- package install -----
 # 只代装 apt 能装的东西。其他发行版不猜包名、也不去碰 sudo，直接把命令打给用户 ——
 # 猜错的代价（装错包、改坏仓库、在无 tty 时抛 sudo 错误）比省下的几步大得多。
 # --no-apt 供“包由外部管理”的宿主使用；其余步骤照常进行。
 APT_OK=1
-if [[ "$NO_APT" -eq 1 ]]; then
+if [[ "$DO_CHECK" -eq 1 ]]; then
+    # --check is read-only: never install anything while diagnosing.
+    APT_OK=0
+elif [[ "$NO_APT" -eq 1 ]]; then
     APT_OK=0
     echo "note: --no-apt: skipping package installation (tools must already be present)"
 elif [[ "$PKG_MGR" != "apt-get" ]]; then
@@ -435,6 +435,24 @@ if [[ "$APT_OK" -eq 1 ]]; then
     if ((${#SKIPPED[@]})); then
         echo "note: not available in this distro, skipped: ${SKIPPED[*]}"
     fi
+fi
+
+# ------------------------------------------------------------ env contract ---
+# 到了这里，apt 宿主上编译器已随包装好，env.sh 的 CC/CXX 校验才有意义。
+# --check 例外：它是给裸机做诊断的，缺编译器时只记录，由 do_check 报 [MISSING]。
+if [[ "$DO_CHECK" -eq 1 ]]; then
+    export FFBUILD_ENV_CHECK_ONLY=1
+fi
+# shellcheck source=native/env.sh
+source "$HERE/env.sh"
+
+if [[ -n "${FFBUILD_IGNORED_CARGO_HOME:-}${FFBUILD_IGNORED_RUSTUP_HOME:-}" ]]; then
+    echo "note: ignoring CARGO_HOME/RUSTUP_HOME from the environment; build caches stay under $FFBUILD_BUILDTOOLS_PREFIX"
+fi
+
+if [[ "$DO_CHECK" -eq 1 ]]; then
+    do_check
+    exit $?
 fi
 
 # ------------------------------------------------------------ build tools -----

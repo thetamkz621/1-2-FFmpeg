@@ -254,15 +254,27 @@ export NM="$(_ffbuild_pick FFBUILD_NM     "$_FFBUILD_ENV_SNAP_NM"     "$_ffbuild
 export STRIP="$(_ffbuild_pick FFBUILD_STRIP "$_FFBUILD_ENV_SNAP_STRIP" "$_ffbuild_def_strip")"
 
 # Fail early instead of letting every stage report "command not found".
+# `setup.sh --check` is the exception: it exists to diagnose bare hosts, so with
+# FFBUILD_ENV_CHECK_ONLY=1 a missing driver is only recorded here and reported by
+# setup's own checklist. Everything below tolerates an absent driver (it only
+# probes it with 2>/dev/null), so the contract stays valid in that mode.
+_ffbuild_missing_drivers=()
 for _t in CC CXX; do
     _v="${!_t}"
     if ! command -v "$_v" >/dev/null 2>&1; then
-        echo "native/env.sh: $_t='$_v' was not found in PATH" >&2
-        echo "  install it, set $_t, or pick FFBUILD_TOOLCHAIN_MODE=host|clang|gcc" >&2
-        return 1 2>/dev/null || exit 1
+        if [[ "${FFBUILD_ENV_CHECK_ONLY:-0}" == 1 ]]; then
+            _ffbuild_missing_drivers+=("$_t=$_v")
+        else
+            echo "native/env.sh: $_t='$_v' was not found in PATH" >&2
+            echo "  install it, set $_t, or pick FFBUILD_TOOLCHAIN_MODE=host|clang|gcc" >&2
+            return 1 2>/dev/null || exit 1
+        fi
     fi
 done
-unset _t _v
+if ((${#_ffbuild_missing_drivers[@]})); then
+    echo "note: no usable compiler (${_ffbuild_missing_drivers[*]}); continuing because --check only diagnoses" >&2
+fi
+unset _t _v _ffbuild_missing_drivers
 
 FFBUILD_COMPILER="$(_ffbuild_cc_kind "$CC")"
 export FFBUILD_COMPILER
