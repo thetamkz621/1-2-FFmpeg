@@ -473,6 +473,11 @@ else
     unset _bt_args
 fi
 
+# env.sh 是在装包之后、建工具之前 source 的，那时前缀 bin 还不存在，所以它没有
+# 进 PATH；buildtools.sh 只在自己的子 shell 里前置。裸机跑完这一步之后才第一次
+# 需要这些工具（prepare_rust 要 pkg-config），在这里补上。
+_ffbuild_path_prepend "$FFBUILD_BUILDTOOLS_BIN"
+
 # opam 是预编译二进制（不是源码包），所以留在 setup 里下载。
 bt_fetch() {  # <url> <dest> <sha256>
     local url="$1" dest="$2" want="$3" got=""
