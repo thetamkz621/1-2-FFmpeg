@@ -155,8 +155,7 @@ version_ge() {  # $1 >= $2 (version sort)
 # enough to keep it one flag away.
 APT_CORE=(
     # 自举根：没有这些就什么都编不了
-    build-essential gcc g++ binutils make patch
-    libc6-dev zlib1g-dev libssl-dev
+    build-essential zlib1g-dev libssl-dev
     # 网络与归档（wget 是 setup 自己的下载兜底）
     git curl wget ca-certificates
     tar xz-utils
