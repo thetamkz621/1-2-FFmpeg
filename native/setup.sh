@@ -9,15 +9,15 @@
 #
 # Usage:
 #   ./native/setup.sh                 # install core build prerequisites
-#   ./native/setup.sh --all           # + optional deps (rust, extra libs)
-#   ./native/setup.sh --with-rust     # rust toolchain + cargo-c (needed by rav1e/librsvg)
+#   ./native/setup.sh --all           # also install the optional upstream packages
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
 #   ./native/setup.sh --no-apt        # skip package installation (host manages its own)
 #   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
 #   ./native/setup.sh --with-tools=a,b   # build these build tools even if only some are missing
 #   ./native/setup.sh --no-managed-tools # do not build tools; use whatever the host provides
 #   ./native/setup.sh --check         # only verify what is present
-#   ./native/setup.sh --print-apt     # print the apt package list and exit
+#   ./native/setup.sh --print-apt     # print the core apt package list and exit
+#   ./native/setup.sh --print-apt=all # ... including the --all extras
 #
 set -euo pipefail
 
@@ -27,10 +27,10 @@ source "$HERE/env.sh"
 
 DO_CHECK=0
 DO_ALL=0
-WITH_RUST=0
 WITH_CTNG=0
 NO_APT=0
 PRINT_APT=0
+PRINT_APT_ALL=0
 ONLY_BUILDTOOLS=0
 NO_MANAGED_TOOLS=0
 WITH_TOOLS=""
@@ -38,11 +38,11 @@ WITH_TOOLS=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --check)      DO_CHECK=1 ;;
-    --all)        DO_ALL=1; WITH_RUST=1 ;;
-    --with-rust)  WITH_RUST=1 ;;
+    --all)        DO_ALL=1 ;;
     --with-ctng)  WITH_CTNG=1 ;;
     --no-apt)     NO_APT=1 ;;
     --print-apt)  PRINT_APT=1 ;;
+    --print-apt=all) PRINT_APT=1; PRINT_APT_ALL=1 ;;
     --buildtools-only) ONLY_BUILDTOOLS=1 ;;
     --no-managed-tools) NO_MANAGED_TOOLS=1 ;;
     --with-tools=*)      WITH_TOOLS="${1#*=}" ;;
@@ -147,23 +147,41 @@ version_ge() {  # $1 >= $2 (version sort)
 # in the repo-local venv, which is prepended to PATH for every build (see the
 # "python" section below). Only the interpreter and the venv tooling come from the
 # distro, so a host never ends up with two half-populated Python environments.
+#
+# APT_CORE is what the default target graph actually needs; APT_EXTRA is everything
+# else upstream's image carries, installed only with --all. Nothing is dropped just
+# because today's linux64 gpl build happens not to use it — the other targets and
+# variants have not been exercised yet, and upstream installing it is evidence
+# enough to keep it one flag away.
 APT_CORE=(
-    build-essential gcc g++ binutils make patch
+    # 自举根：没有这些就什么都编不了
+    build-essential zlib1g-dev libssl-dev
+    # 网络与归档（wget 是 setup 自己的下载兜底）
     git curl wget ca-certificates
-    tar xz-utils p7zip-full libarchive-tools
-    xxd
+    tar xz-utils
+    # Python 运行时：构建期模块由 venv 提供，发行版只管解释器与建 venv
     python3 python3-dev python3-pip python3-venv python3-setuptools
     python-is-python3
-    libxml2-utils
-    subversion mercurial
-    clang llvm lld
-    libc6-dev zlib1g-dev libssl-dev
+    # --enable-cuda-llvm：configure 把 nvcc 默认成 clang
+    clang llvm
+    # 默认图要 OCaml（fftw3 的 genfft）与 Java + ant（libbluray 的 BD-J jar）
+    ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev
+    default-jdk-headless ant
+    # lame / xvid 两个 stage 走 svn checkout
+    subversion
 )
 APT_EXTRA=(
+    # 上游镜像有、当前默认图用不到；--all 时装上
+    p7zip-full libarchive-tools xxd libxml2-utils mercurial
+    # 上游与 clang/llvm 同组：覆盖率、交叉产物试运行、32 位目标的多架构
+    lcov lld qemu-user gcc-multilib g++-multilib
+    # 自建 libtool 只装 libtool / libtoolize，ltdl 头文件仍由发行版提供
+    libltdl-dev
+    # install-doc 的 HTML 通道；缺了 build.sh 只告警
+    texi2html
+    # 上游装 nodesource 的 nodejs 与 python3-apt；仓库内零引用，保持能力对齐
+    python3-apt nodejs
     gtk-doc-tools gobject-introspection itstool
-    default-jdk-headless ant
-    ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev
-    wget2
 )
 
 apt_available() { apt-cache show "$1" >/dev/null 2>&1; }
@@ -175,7 +193,10 @@ filter_available() {
 }
 
 if [[ "$PRINT_APT" -eq 1 ]]; then
-    printf '%s\n' "${APT_CORE[@]}" "${APT_EXTRA[@]}" | sort -u
+    printf '%s\n' "${APT_CORE[@]}" | sort -u
+    if [[ "$PRINT_APT_ALL" -eq 1 ]]; then
+        printf '%s\n' "${APT_EXTRA[@]}" | sort -u
+    fi
     exit 0
 fi
 
@@ -195,7 +216,7 @@ FFBUILD_BT_OCAML_COMPILER="${FFBUILD_BT_OCAML_COMPILER:-ocaml-base-compiler.4.14
 # autoconf / automake / cmake 不在此列：它们可能是 setup 自己构建的托管版本，
 # 由下面的 "build tools" 表按版本下限判定；meson 由 venv 提供，也不在系统工具之列。
 REQUIRED_TOOLS=(gcc g++ make git patch svn tar xz python3 gen-implib git-mini-clone retry-tool)
-OPTIONAL_TOOLS=(clang cargo rustc node 7z xxd gperf bison flex ragel itstool help2man)
+OPTIONAL_TOOLS=(clang node 7z xxd)
 
 do_check() {
     local missing=() t
@@ -238,7 +259,7 @@ do_check() {
 
     echo "== runtime prerequisites (not managed; install from your distro) =="
     rt_ok()      { printf '  [ok]      %s\n' "$1"; }
-    # 第三个参数为 optional 时只提示、不影响退出码（例如 cargo-c 的 OpenSSL 3 只在 --with-rust 时需要）。
+    # 第三个参数为 optional 时只提示、不影响退出码。
     rt_blocking=0
     rt_missing() {
         printf '  [MISSING] %s\n              %s\n' "$1" "$2"
@@ -397,7 +418,7 @@ fi
 
 if [[ "$APT_OK" -eq 1 ]]; then
     PKGS=("${APT_CORE[@]}")
-    [[ "$DO_ALL" -eq 1 || "$WITH_RUST" -eq 1 ]] && PKGS+=("${APT_EXTRA[@]}")
+    [[ "$DO_ALL" -eq 1 ]] && PKGS+=("${APT_EXTRA[@]}")
 
     MAPFILE_PKGS=()
     while IFS= read -r p; do [[ -n "$p" ]] && MAPFILE_PKGS+=("$p"); done < <(filter_available "${PKGS[@]}")
@@ -651,12 +672,12 @@ echo "  $FFBUILD_ROOT"
 # cargo/rustc on PATH are rustup *proxies* that resolve the toolchain through
 # RUSTUP_HOME.  A proxy that exists but cannot run is worse than no rust at all:
 # it passes a "command -v" test and then fails inside the build.  Ask the tools
-# to actually run instead of trusting PATH.  Defined outside the --with-rust
-# branch: the "rust absent" hints below use them too.
+# to actually run instead of trusting PATH.  rav1e/librsvg are part of the
+# default gpl graph, so rust is prepared unconditionally rather than on demand.
 rust_works() { command -v cargo >/dev/null 2>&1 && cargo --version >/dev/null 2>&1; }
 cargo_c_works() { command -v cargo-cinstall >/dev/null 2>&1 && cargo-cinstall --version >/dev/null 2>&1; }
 
-if [[ "$WITH_RUST" -eq 1 ]]; then
+prepare_rust() {
     echo "== preparing rust toolchain (rav1e / librsvg) =="
     # env.sh already pointed CARGO_HOME/RUSTUP_HOME into .buildtools. Keep them
     # there unless the host already has a usable toolchain (see below).
@@ -674,7 +695,7 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
             echo "  note: cargo-c will build against OpenSSL 3 (/usr/include/openssl3)"
         else
             echo "  WARNING: OpenSSL < 3 and openssl3-devel is missing; cargo-c may fail" >&2
-            echo "           install it (dnf install openssl3-devel) or skip --with-rust" >&2
+            echo "           install openssl3-devel (dnf) first; cargo-c needs OpenSSL 3" >&2
         fi
     fi
     # cargo-c is the only piece that has no distro package; everything else
@@ -746,13 +767,9 @@ if [[ "$WITH_RUST" -eq 1 ]]; then
             note_failure "rust (toolchain)"
         fi
     fi
-else
-    if ! rust_works; then
-        echo "note: rust/cargo absent — rav1e and librsvg cannot be built; run ./native/setup.sh --with-rust" >&2
-    elif ! cargo_c_works; then
-        echo "note: cargo-c absent — rav1e cannot be built; run ./native/setup.sh --with-rust" >&2
-    fi
-fi
+}
+
+prepare_rust
 
 # ---------------------------------------------------------------- ct-ng -------
 if [[ "$WITH_CTNG" -eq 1 ]]; then
