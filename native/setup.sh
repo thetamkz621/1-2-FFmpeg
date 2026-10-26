@@ -22,8 +22,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=native/env.sh
-source "$HERE/env.sh"
+# env.sh is sourced only after the distro packages are in place: it aborts when
+# no C compiler can be resolved, and on a bare host that compiler is one of the
+# packages this script installs. See the "package install" section below.
 
 DO_CHECK=0
 DO_ALL=0
@@ -52,10 +53,6 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
-
-if [[ -n "${FFBUILD_IGNORED_CARGO_HOME:-}${FFBUILD_IGNORED_RUSTUP_HOME:-}" ]]; then
-    echo "note: ignoring CARGO_HOME/RUSTUP_HOME from the environment; build caches stay under $FFBUILD_BUILDTOOLS_PREFIX"
-fi
 
 # ---------------------------------------------------------------- sudo --------
 if [[ "$(id -u)" -eq 0 ]]; then
@@ -270,7 +267,8 @@ do_check() {
     if command -v "$CC" >/dev/null 2>&1 && command -v "$CXX" >/dev/null 2>&1; then
         rt_ok "compiler $FFBUILD_COMPILER ($CC / $CXX)"
     else
-        rt_missing "compiler $FFBUILD_TOOLCHAIN_MODE" "$(tool_hint "${FFBUILD_COMPILER:-clang}")"
+        rt_missing "compiler $CC / $CXX (mode $FFBUILD_TOOLCHAIN_MODE)" \
+                   "$(tool_hint "${FFBUILD_TOOLCHAIN_MODE/host/gcc}")"
     fi
     if [[ "$FFBUILD_COMPILER" == clang ]]; then
         _libatomic="$("$CC" -print-file-name=libatomic.so 2>/dev/null || true)"
@@ -329,7 +327,11 @@ do_check() {
                    "apt install ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev | dnf install ocaml ocaml-findlib ocaml-ocamlbuild (num has no rpm) | pacman -S ocaml ocaml-findlib ocamlbuild; setup.sh provisions it through opam when num is missing" ;;
     esac
 
-    cc_major="$(c++ -dumpversion 2>/dev/null | awk -F. '{print $1}')"
+    # pipefail + 缺失的 c++ 会让整条管道返回 127，--check 在裸机上必须先挡住。
+    cc_major=""
+    if command -v c++ >/dev/null 2>&1; then
+        cc_major="$(c++ -dumpversion 2>/dev/null | awk -F. '{print $1}')"
+    fi
     if [[ -n "$cc_major" ]] && (( cc_major >= 9 )); then
         rt_ok "system c++ >= 9        shaderc native_build (found $cc_major)"
     else
@@ -387,17 +389,15 @@ do_check() {
     fi
 }
 
-if [[ "$DO_CHECK" -eq 1 ]]; then
-    do_check
-    exit $?
-fi
-
 # ------------------------------------------------------- package install -----
 # 只代装 apt 能装的东西。其他发行版不猜包名、也不去碰 sudo，直接把命令打给用户 ——
 # 猜错的代价（装错包、改坏仓库、在无 tty 时抛 sudo 错误）比省下的几步大得多。
 # --no-apt 供“包由外部管理”的宿主使用；其余步骤照常进行。
 APT_OK=1
-if [[ "$NO_APT" -eq 1 ]]; then
+if [[ "$DO_CHECK" -eq 1 ]]; then
+    # --check is read-only: never install anything while diagnosing.
+    APT_OK=0
+elif [[ "$NO_APT" -eq 1 ]]; then
     APT_OK=0
     echo "note: --no-apt: skipping package installation (tools must already be present)"
 elif [[ "$PKG_MGR" != "apt-get" ]]; then
@@ -437,6 +437,24 @@ if [[ "$APT_OK" -eq 1 ]]; then
     fi
 fi
 
+# ------------------------------------------------------------ env contract ---
+# 到了这里，apt 宿主上编译器已随包装好，env.sh 的 CC/CXX 校验才有意义。
+# --check 例外：它是给裸机做诊断的，缺编译器时只记录，由 do_check 报 [MISSING]。
+if [[ "$DO_CHECK" -eq 1 ]]; then
+    export FFBUILD_ENV_CHECK_ONLY=1
+fi
+# shellcheck source=native/env.sh
+source "$HERE/env.sh"
+
+if [[ -n "${FFBUILD_IGNORED_CARGO_HOME:-}${FFBUILD_IGNORED_RUSTUP_HOME:-}" ]]; then
+    echo "note: ignoring CARGO_HOME/RUSTUP_HOME from the environment; build caches stay under $FFBUILD_BUILDTOOLS_PREFIX"
+fi
+
+if [[ "$DO_CHECK" -eq 1 ]]; then
+    do_check
+    exit $?
+fi
+
 # ------------------------------------------------------------ build tools -----
 # 构建工具全部源码自建：配方在 native/buildtools.d/，驱动在 native/buildtools.sh。
 # 装进 $FFBUILD_BUILDTOOLS_PREFIX/prefix，只放 bin/ 与 share/，不进 PKG_CONFIG_LIBDIR，
@@ -454,6 +472,11 @@ else
         note_failure "build tools (native/buildtools.sh)"
     unset _bt_args
 fi
+
+# env.sh 是在装包之后、建工具之前 source 的，那时前缀 bin 还不存在，所以它没有
+# 进 PATH；buildtools.sh 只在自己的子 shell 里前置。裸机跑完这一步之后才第一次
+# 需要这些工具（prepare_rust 要 pkg-config），在这里补上。
+_ffbuild_path_prepend "$FFBUILD_BUILDTOOLS_BIN"
 
 # opam 是预编译二进制（不是源码包），所以留在 setup 里下载。
 bt_fetch() {  # <url> <dest> <sha256>
@@ -702,7 +725,17 @@ prepare_rust() {
     # (cargo, rustc) is reused from the host when it works.
     cargo_c_install() {
         (
-            unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH
+            # cargo-c 是宿主工具，应该看系统库。env.sh 的 PKG_CONFIG_LIBDIR 只指向
+            # ffbuild 前缀，而托管 pkgconf 编译进去的默认 pc_path 落在 .buildtools
+            # 里，两者都到不了 /usr 下的 .pc（libssl-dev 的 openssl.pc 就因此找不到）。
+            # 这里显式改指系统的 pkgconfig 目录；多架构目录名从编译器推导，免得
+            # 在 x86_64/aarch64 之间硬编码。
+            _sys_pc="/usr/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
+            _triple="$("${CC:-cc}" -dumpmachine 2>/dev/null || true)"
+            [[ -n "$_triple" ]] && _sys_pc="/usr/lib/$_triple/pkgconfig:$_sys_pc"
+            unset PKG_CONFIG_PATH
+            export PKG_CONFIG_LIBDIR="$_sys_pc"
+            unset _sys_pc _triple
             # 中间产物不放 TMPDIR（可能是 tmpfs）也不放 ~/.cargo：cargo-c 的构建很吃空间。
             mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/tmp" "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target"
             TMPDIR="$FFBUILD_BUILDTOOLS_PREFIX/tmp" \
@@ -799,7 +832,7 @@ if ((${#SETUP_FAILURES[@]})); then
     echo
     echo "== setup finished with ${#SETUP_FAILURES[@]} problem(s) =="
     printf '%s\n' "${SETUP_FAILURES[@]}" | sort -u | sed 's/^/  - /'
-    echo "  managed build logs : $BT_PREFIX/log/"
+    echo "  managed build logs : $FFBUILD_BUILDTOOLS_PREFIX/log/"
     echo "  distro packages    : ./native/setup.sh --check  (per-tool command) / README §2.1"
     ffbuild_env_dump
     echo
