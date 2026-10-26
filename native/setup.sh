@@ -328,15 +328,29 @@ do_check() {
     esac
 
     # pipefail + 缺失的 c++ 会让整条管道返回 127，--check 在裸机上必须先挡住。
-    cc_major=""
-    if command -v c++ >/dev/null 2>&1; then
-        cc_major="$(c++ -dumpversion 2>/dev/null | awk -F. '{print $1}')"
-    fi
-    if [[ -n "$cc_major" ]] && (( cc_major >= 9 )); then
-        rt_ok "system c++ >= 9        shaderc native_build (found $cc_major)"
+    # 依赖里已经有 C++23 的用法（openal-soft 用 string_view 的范围构造）。直接
+    # 探测标准库能力，比按编译器版本号判断可靠：clang 也可能配着旧的 libstdc++。
+    local cxx_probe cxx_hint
+    cxx_probe='#include <algorithm>
+#include <ranges>
+#include <string_view>
+int main(int argc, char **argv) {
+    std::string_view sv = argv[0];
+    char sep = static_cast<char>(44);
+    std::ranges::for_each(sv | std::views::split(sep), [](auto&& r) {
+        std::string_view e{r.begin(), r.end()};
+        (void)e;
+    });
+    (void)argc;
+}'
+    if printf '%s\n' "$cxx_probe" | "$CXX" -std=gnu++20 -x c++ -fsyntax-only - >/dev/null 2>&1; then
+        rt_ok "c++23 string_view      openal (CXX=$CXX)"
     else
-        rt_missing "system c++ >= 9        shaderc native_build" \
-                   "dnf install gcc-toolset-14 and put its bin before /usr/bin"
+        cxx_hint="$(install_hint "gcc-12 g++-12" "gcc-toolset-12" "gcc")"
+        if command -v g++-12 >/dev/null 2>&1; then
+            cxx_hint="$cxx_hint；系统已装 g++-12，可用 FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12 重跑"
+        fi
+        rt_missing "c++23 string_view      openal (CXX=$CXX)" "$cxx_hint"
     fi
 
     # cargo-c needs OpenSSL 3 *development* files, not the CLI: on EL8 the
