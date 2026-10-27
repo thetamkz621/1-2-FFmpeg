@@ -236,18 +236,31 @@ do_check() {
         bt_missing=1
         echo "              -> run ./native/setup.sh to build the missing ones"
     fi
-    local py_bin py_ver
+    # 这一项要报告的是"宿主自带的解释器"，但 env.sh 把构建 venv 的 bin 放在了
+    # PATH 最前：直接 command -v 会命中 venv 里的 python3，于是把 venv 当成系统
+    # 解释器（宿主的 python3 缺失也看不出来）。先把该目录从 PATH 摘掉再找。
+    local py_bin py_ver py_sys _p
+    local -a _pp
+    local _sys_path=""
     py_bin=""
     py_ver=""
-    for _c in python3.13 python3.12 python3.11 python3.10 python3; do
-        command -v "$_c" >/dev/null 2>&1 || continue
-        _v="$("$_c" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
-        [[ -n "$_v" ]] || continue
-        if version_ge "$_v" "$FFBUILD_BT_SYSTEM_python"; then py_bin="$_c"; py_ver="$_v"; break; fi
+    py_sys=""
+    IFS=: read -r -a _pp <<<"$PATH"
+    for _p in "${_pp[@]}"; do
+        [[ "$_p" == "$FFBUILD_PYTHON_PREFIX/bin" ]] && continue
+        _sys_path+="${_sys_path:+:}$_p"
     done
-    unset _v _c
-    if [[ -n "$py_bin" ]]; then
-        printf '  %-9s system=%-8s min=%-7s ok (%s)\n' python "$py_ver" "$FFBUILD_BT_SYSTEM_python" "$py_bin"
+    for _c in python3.13 python3.12 python3.11 python3.10 python3; do
+        py_bin="$(PATH="$_sys_path" command -v "$_c" 2>/dev/null || true)"
+        [[ -n "$py_bin" ]] || continue
+        _v="$("$py_bin" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
+        [[ -n "$_v" ]] || continue
+        if version_ge "$_v" "$FFBUILD_BT_SYSTEM_python"; then py_sys="$py_bin"; py_ver="$_v"; break; fi
+        py_bin=""
+    done
+    unset _v _c _p _pp _sys_path
+    if [[ -n "$py_sys" ]]; then
+        printf '  %-9s system=%-8s min=%-7s ok (%s)\n' python "$py_ver" "$FFBUILD_BT_SYSTEM_python" "$py_sys"
     else
         printf '  %-9s system=%-8s min=%-7s NEEDS INSTALL\n' python "${py_ver:-none}" "$FFBUILD_BT_SYSTEM_python"
     fi
@@ -278,6 +291,43 @@ do_check() {
             rt_missing "libatomic (clang)     rubberband 需要 -latomic" "$(tool_hint libatomic)"
         fi
         unset _libatomic
+    fi
+
+    # 构建期 Python 只有一个来源：venv。分两层检查——系统解释器能否建出带 pip
+    # 的 venv（Debian 的 python3-venv、EL 的 python3.x-pip 缺了就不行），以及已
+    # 存在的 venv 是否完整。只看解释器版本会漏掉后两者。
+    if [[ -z "$py_sys" ]]; then
+        rt_missing "python >= $FFBUILD_BT_SYSTEM_python          build venv" "$(tool_hint python3)"
+    elif "$py_sys" -c 'import venv, ensurepip' >/dev/null 2>&1; then
+        rt_ok "python venv module      $py_sys"
+    else
+        rt_missing "python venv module      build venv ($py_sys)" \
+                   "$(install_hint "python3-venv" "python3.12-pip" python)"
+    fi
+
+    # 用 pyvenv.cfg 判断"venv 是否存在"：只测 bin/python3 会把残缺的 venv
+    # （例如 python3.x 软链断掉）当成没有创建，掩盖真正的问题。
+    if [[ -e "$FFBUILD_PYTHON_PREFIX/pyvenv.cfg" ]]; then
+        local venv_meson venv_ok=1
+        venv_meson="$(probe_version "$FFBUILD_PYTHON_PREFIX/bin/meson" --version)"
+        [[ -x "$FFBUILD_PYTHON_PREFIX/bin/pip" ]] || venv_ok=0
+        for _m in mesonbuild jsonschema jinja2; do
+            "$FFBUILD_PYTHON_PREFIX/bin/python3" -c "import $_m" 2>/dev/null || venv_ok=0
+        done
+        if [[ -n "$venv_meson" ]] && version_ge "$venv_meson" "$FFBUILD_BT_MESON"; then
+            :
+        else
+            venv_ok=0
+        fi
+        if (( venv_ok )); then
+            rt_ok "build venv             meson $venv_meson"
+        else
+            rt_missing "build venv             pip/meson incomplete" \
+                       "rerun ./native/setup.sh (it recreates $FFBUILD_PYTHON_PREFIX when pip is missing)"
+        fi
+        unset _m
+    else
+        rt_ok "build venv             not created yet (setup creates it)"
     fi
 
     if perl -MTime::Piece -e1 2>/dev/null; then
@@ -594,13 +644,25 @@ fi
 # 构建只需要一个解释器：这个 venv。它同时提供 meson 与 jsonschema/jinja2。
 # Python 本身不构建——版本不足时给出对应发行版的安装命令。
 PY_MIN="$FFBUILD_BT_SYSTEM_python"
+# 建 venv 必须用宿主解释器：env.sh 会在 venv 存在时把它的 bin 前置到 PATH，
+# 用 venv 自己的 python 去重建 venv 会得到自我引用的 python3.x 软链（pyvenv.cfg
+# 的 home 指向 venv 自身），pip 也就装不进去。先把该目录从 PATH 摘掉。
+_sys_path=""
+IFS=: read -r -a _pp <<<"$PATH"
+for _p in "${_pp[@]}"; do
+    [[ "$_p" == "$FFBUILD_PYTHON_PREFIX/bin" ]] && continue
+    _sys_path+="${_sys_path:+:}$_p"
+done
+unset _p _pp
 PYBIN=""
 for _c in python3.13 python3.12 python3.11 python3.10 python3; do
-    command -v "$_c" >/dev/null 2>&1 || continue
-    _v="$("$_c" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
+    _cand="$(PATH="$_sys_path" command -v "$_c" 2>/dev/null || true)"
+    [[ -n "$_cand" ]] || continue
+    _v="$("$_cand" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
     [[ -n "$_v" ]] || continue
-    if version_ge "$_v" "$PY_MIN"; then PYBIN="$(command -v "$_c")"; break; fi
+    if version_ge "$_v" "$PY_MIN"; then PYBIN="$_cand"; break; fi
 done
+unset _c _cand _v _sys_path
 if [[ -z "$PYBIN" ]]; then
     echo "ERROR: no python >= $PY_MIN found; it is needed to host the build venv." >&2
     echo "  Rocky/RHEL 8:  sudo dnf install python3.12" >&2
@@ -625,17 +687,34 @@ if [[ "$py_ok" -eq 1 ]]; then
     echo "note: build venv ready at $FFBUILD_PYTHON_PREFIX (meson $py_meson)"
 else
     echo "== preparing build venv at $FFBUILD_PYTHON_PREFIX =="
-    if [[ ! -x "$FFBUILD_PYTHON_PREFIX/bin/python3" ]]; then
-        "$PYBIN" -m venv "$FFBUILD_PYTHON_PREFIX" ||
-            { echo "  WARNING: could not create venv with $PYBIN" >&2; }
+    # 只有 pip 缺失时才重建：venv 已存在、只是模块没装好，重建没有意义。
+    # ensurepip 不可用时 -m venv 只会打印一段不含出处的提示，先探测再决定。
+    _venv_failed=0
+    if [[ ! -x "$FFBUILD_PYTHON_PREFIX/bin/pip" ]]; then
+        if ! "$PYBIN" -c 'import venv, ensurepip' >/dev/null 2>&1; then
+            echo "  ERROR: $PYBIN cannot create a venv with pip (venv/ensurepip missing)" >&2
+            echo "         $(tool_hint python3)" >&2
+            note_failure "python venv ($PYBIN: venv/ensurepip unavailable)"
+            _venv_failed=1
+        elif ! "$PYBIN" -m venv --clear "$FFBUILD_PYTHON_PREFIX"; then
+            echo "  ERROR: could not create venv at $FFBUILD_PYTHON_PREFIX" >&2
+            note_failure "python venv (could not create $FFBUILD_PYTHON_PREFIX)"
+            _venv_failed=1
+        fi
     fi
-    if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/pip" ]] &&
-        "$FFBUILD_PYTHON_PREFIX/bin/pip" install --quiet --no-cache-dir --upgrade pip "${PY_MODULES[@]}"; then
-        echo "  python: $("$FFBUILD_PYTHON_PREFIX/bin/python3" -V 2>&1)"
-        echo "  meson:  $("$FFBUILD_PYTHON_PREFIX/bin/meson" --version 2>/dev/null)"
-    else
-        echo "  WARNING: could not install ${PY_MODULES[*]} into $FFBUILD_PYTHON_PREFIX" >&2
+    if [[ -x "$FFBUILD_PYTHON_PREFIX/bin/pip" ]]; then
+        if "$FFBUILD_PYTHON_PREFIX/bin/pip" install --quiet --no-cache-dir --upgrade pip "${PY_MODULES[@]}"; then
+            echo "  python: $("$FFBUILD_PYTHON_PREFIX/bin/python3" -V 2>&1)"
+            echo "  meson:  $("$FFBUILD_PYTHON_PREFIX/bin/meson" --version 2>/dev/null)"
+        else
+            echo "  WARNING: could not install ${PY_MODULES[*]} into $FFBUILD_PYTHON_PREFIX" >&2
+            note_failure "python venv (pip install failed)"
+        fi
+    elif (( ! _venv_failed )); then
+        echo "  ERROR: $FFBUILD_PYTHON_PREFIX has no pip after creation" >&2
+        note_failure "python venv (pip missing after creation)"
     fi
+    unset _venv_failed
 fi
 
 # ------------------------------------------------------ build-time tools ------
