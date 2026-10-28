@@ -20,6 +20,14 @@ rest — autoconf, automake, cmake, nasm, yasm, gettext and the Python venv — 
 
 `./native/setup.sh --check` prints the required and optional tool list without changing anything.
 
+> [!IMPORTANT]
+> Requires compiler with C++23 support (like GCC 12 or higher).
+> > Dependency `openal-soft` demands for range constructor for std::string_view `std::string_view`
+> 
+> Requires LLVM 15 or higher.
+> > LLVMgold plugin version (for binutils) must be 15 or higher.   
+> > Otherwise `ar` cannot index Rust bitcode symbols (From dependency `librsvg`).
+
 ### Preparation
 
 ```bash

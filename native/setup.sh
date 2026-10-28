@@ -377,16 +377,48 @@ do_check() {
                    "apt install ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev | dnf install ocaml ocaml-findlib ocaml-ocamlbuild (num has no rpm) | pacman -S ocaml ocaml-findlib ocamlbuild; setup.sh provisions it through opam when num is missing" ;;
     esac
 
-    # pipefail + 缺失的 c++ 会让整条管道返回 127，--check 在裸机上必须先挡住。
-    cc_major=""
-    if command -v c++ >/dev/null 2>&1; then
-        cc_major="$(c++ -dumpversion 2>/dev/null | awk -F. '{print $1}')"
-    fi
-    if [[ -n "$cc_major" ]] && (( cc_major >= 9 )); then
-        rt_ok "system c++ >= 9        shaderc native_build (found $cc_major)"
+    # 依赖里已经有 C++23 的用法（openal-soft 用 string_view 的范围构造）。直接
+    # 探测标准库能力，比按编译器版本号判断可靠：clang 也可能配着旧的 libstdc++。
+    local cxx_probe cxx_hint
+    cxx_probe='#include <algorithm>
+#include <ranges>
+#include <string_view>
+int main(int argc, char **argv) {
+    std::string_view sv = argv[0];
+    char sep = static_cast<char>(44);
+    std::ranges::for_each(sv | std::views::split(sep), [](auto&& r) {
+        std::string_view e{r.begin(), r.end()};
+        (void)e;
+    });
+    (void)argc;
+}'
+    if printf '%s\n' "$cxx_probe" | "$CXX" -std=gnu++20 -x c++ -fsyntax-only - >/dev/null 2>&1; then
+        rt_ok "c++23 string_view      openal (CXX=$CXX)"
     else
-        rt_missing "system c++ >= 9        shaderc native_build" \
-                   "dnf install gcc-toolset-14 and put its bin before /usr/bin"
+        cxx_hint="$(install_hint "gcc-12 g++-12" "gcc-toolset-12" "gcc")"
+        if command -v g++-12 >/dev/null 2>&1; then
+            cxx_hint="$cxx_hint；系统已装 g++-12，可用 FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12 重跑"
+        fi
+        rt_missing "c++23 string_view      openal (CXX=$CXX)" "$cxx_hint"
+    fi
+
+    # Rust 产物（rav1e/librsvg）里带 LLVM bitcode，binutils 的 bfd 靠 LLVMgold
+    # 插件提取其中的符号。LLVM 14 及更早读不了 opaque pointer 形式的 IR，ar 会
+    # 漏掉符号索引，链接 Rust 静态库时报 hidden symbol isn't defined；LLVM 15
+    # 起正常。binutils 本身 2.38 已够用，限制在插件一侧；没有插件时 bfd 直接读
+    # 原生符号表，同样可行。
+    local gold gold_ver gold_bad=0
+    for gold in /usr/lib/bfd-plugins/LLVMgold*.so; do
+        [[ -e "$gold" ]] || continue
+        gold_ver="$(readlink -f "$gold" | sed -n 's|.*/llvm-\([0-9][0-9]*\)/.*|\1|p')"
+        [[ -n "$gold_ver" ]] || continue
+        (( gold_ver >= 15 )) || gold_bad=1
+    done
+    if (( gold_bad )); then
+        rt_missing "llvm bfd plugin >= 15  rust 静态库" \
+                   "$(install_hint "llvm-15" "llvm-toolset-15" "llvm")；或移除 /usr/lib/bfd-plugins/LLVMgold*.so，让 bfd 读原生符号表"
+    else
+        rt_ok "llvm bfd plugin       rust 静态库"
     fi
 
     # cargo-c needs OpenSSL 3 *development* files, not the CLI: on EL8 the

@@ -17,7 +17,13 @@ ffbuild_enabled() {
 
 ffbuild_dockerdl() {
     default_dl .
-    echo "git submodule update --init --recursive --depth=1 --filter=blob:none"
+    # git 2.36 起 submodule update 才支持 --filter；更老的 git（如 Ubuntu 22.04
+    # 的 2.34）会打印用法并失败。
+    local sm="git submodule update --init --recursive --depth=1"
+    if git_version_ge 2.36; then
+        sm+=" --filter=blob:none"
+    fi
+    echo "$sm"
 }
 
 ffbuild_dockerbuild() {

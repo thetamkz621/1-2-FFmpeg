@@ -20,6 +20,14 @@ yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。
 
 `./native/setup.sh --check` 只报告所需与可选工具，不改动系统。
 
+> [!IMPORTANT]
+> 需要支持 C++23 特性的编译器（例如 GCC 12 或以上版本）
+> > 依赖 `openal-soft` 需要 `std::string_view` 的范围构造
+> 
+> 需要 LLVM 15 或以上版本
+> > binutils 的 LLVMgold 插件版本需 >= 15  
+> > 否则 `ar` 索引不到 Rust bitcode 的符号（来自依赖 `librsvg`）
+
 ### 准备
 
 ```bash
@@ -73,7 +81,8 @@ FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # 对齐 glibc 2.28 基线
 > [!NOTE]
 > `host`（默认）按 `cc` → `gcc` → `clang` 探测，`CXX` 跟随同一家族；`clang` / `gcc` 只设置宿主
 > 工具链的默认值；`ctng` 使用本地构建的 crosstool-ng 工具链（目前未验证），需先运行
-> `./native/setup.sh --with-ctng`。`FFBUILD_CC` / `CC`（以及 `CXX`/`LD`/`AR` 等）可覆盖。
+> `./native/setup.sh --with-ctng`。`FFBUILD_CC` / `CC`（以及 `CXX`/`LD`/`AR` 等）可覆盖，
+> 也可指向带版本号的编译器（如 `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`）。
 > 追加 Flag 用 `FFBUILD_EXTRA_CFLAGS`、`FFBUILD_EXTRA_LDFLAGS`。查看最终配置：
 > `source native/env.sh && ffbuild_env_dump`；完整变量表见 `native/env.sh` 顶部注释。
 
