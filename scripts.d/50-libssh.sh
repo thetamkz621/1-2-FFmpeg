@@ -20,6 +20,7 @@ ffbuild_dockerbuild() {
 
     cmake -GNinja -DCMAKE_TOOLCHAIN_FILE="$FFBUILD_CMAKE_TOOLCHAIN" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$FFBUILD_PREFIX" \
         -DHAVE_STRNDUP=YES -DBUILD_SHARED_LIBS=OFF -DWITH_EXAMPLES=OFF -DWITH_SERVER=OFF -DWITH_SFTP=ON -DWITH_ZLIB=ON \
+        -DWITH_GSSAPI=OFF \
         ..
 
     # Fix compilation on windows, mingw exports the symbol, but the header only shows it for c23.

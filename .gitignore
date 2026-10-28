@@ -1,8 +1,10 @@
 # Native build workspace / output
 /.ffbuild/
 /ffbuild/
+/ffbuild*/
 /artifacts/
 /.cache/
+/.buildtools/
 /Dockerfile*
 
 # Local scratch

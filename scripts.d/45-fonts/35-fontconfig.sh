@@ -32,11 +32,11 @@ ffbuild_dockerbuild() {
         myconf+=(
             --sysconfdir=/etc
             --localstatedir=/var
-            --cross-file=/cross.meson
+            --cross-file="$FFBUILD_MESON_CROSS_FILE"
         )
     elif [[ $TARGET == win* ]]; then
         myconf+=(
-            --cross-file=/cross.meson
+            --cross-file="$FFBUILD_MESON_CROSS_FILE"
         )
     else
         echo "Unknown target"

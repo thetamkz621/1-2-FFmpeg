@@ -1,0 +1,17 @@
+--- a/cmake/modules/CMakeInstall.cmake
++++ b/cmake/modules/CMakeInstall.cmake
+@@ -43,11 +43,10 @@
+             "
+         #include <cstddef>
+         int main() {
+-            #if defined(_LIBCPP_VERSION)
+-            return 0;
+-            #else
+-            return 1;
++            #ifndef _LIBCPP_VERSION
++            #error libc++ is not in use
+             #endif
++            return 0;
+         }"
+             USING_LIBCXX)
+ 

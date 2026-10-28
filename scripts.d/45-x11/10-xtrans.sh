@@ -31,5 +31,7 @@ ffbuild_dockerbuild() {
     make -j$(nproc)
     make install DESTDIR="$FFBUILD_DESTDIR"
 
-    cp -r "$FFBUILD_DESTPREFIX"/share/aclocal/. /usr/share/aclocal
+    # No copy into /usr/share/aclocal: the macros are exported through
+    # ACLOCAL_PATH ($FFBUILD_PREFIX/share/aclocal), which native/env.sh already
+    # sets, so writing to the system acdir is unnecessary and needs root.
 }

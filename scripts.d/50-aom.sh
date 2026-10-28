@@ -18,15 +18,18 @@ ffbuild_dockerstage() {
 }
 
 ffbuild_dockerbuild() {
-    for patch in /patches/*.patch; do
+    for patch in "${FFBUILD_PATCHES:-/patches}"/*.patch; do
         echo "Applying $patch"
         git am < "$patch"
     done
 
     mkdir cmbuild && cd cmbuild
 
-    # Workaround broken build system
-    export CFLAGS="$CFLAGS -pthread -I/opt/ffbuild/include/libvmaf"
+    # Workaround broken build system.
+    # The include dir comes from $FFBUILD_PREFIX: the image's /opt/ffbuild is
+    # where the container merged its dependencies, but natively the prefix is
+    # $FFBUILD_ROOT/prefix.
+    export CFLAGS="$CFLAGS -pthread -I$FFBUILD_PREFIX/include"
 
     cmake -DCMAKE_TOOLCHAIN_FILE="$FFBUILD_CMAKE_TOOLCHAIN" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$FFBUILD_PREFIX" -DBUILD_SHARED_LIBS=OFF -DENABLE_EXAMPLES=NO -DENABLE_TESTS=NO -DENABLE_TOOLS=NO -DCONFIG_TUNE_VMAF=1 ..
     make -j$(nproc)

@@ -41,7 +41,31 @@ if [[ -n "${STAGENAME:-}" && -n "${FFBUILD_STAGE_ROOT:-}" ]]; then
     cd "$STAGE_DIR"
 fi
 
-git config --global --add safe.directory "$PWD" 2>/dev/null || true
+# Git calls a repository "dubious" when its owner is not the current user, and a
+# stage work dir can legitimately be owned by someone else (sources extracted
+# from a cache tarball or carried over from another machine). Inject the
+# exception into this process tree instead of the host config: safe.directory is
+# read from protected configuration, which includes the command scope, so
+# GIT_CONFIG_* covers every git call below. The previous
+# `git config --global --add` appended a new entry to the host's ~/.gitconfig on
+# every stage that ran, duplicates included.
+_git_cfg_index="${GIT_CONFIG_COUNT:-0}"
+export GIT_CONFIG_COUNT=$((_git_cfg_index + 1))
+export "GIT_CONFIG_KEY_${_git_cfg_index}=safe.directory"
+export "GIT_CONFIG_VALUE_${_git_cfg_index}=$PWD"
+unset _git_cfg_index
+
+# `git am` (used by 50-aom) needs a committer identity. Provide a throwaway one
+# for this process tree only -- never write to ~/.gitconfig.
+export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-FFmpeg Builds}"
+export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-builder@localhost}"
+export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-FFmpeg Builds}"
+export GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-builder@localhost}"
+
+# gnulib's pygnulib (run by libiconv's bootstrap) otherwise puts its bytecode
+# cache in $TMPDIR/gnulib-python-cache-$USER. Keep it in the build root; it
+# honours PYTHONPYCACHEPREFIX when set.
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-$FFBUILD_ROOT/.pycache}"
 
 # shellcheck disable=SC1090
 source "$STAGE_SCRIPT"
@@ -81,34 +105,34 @@ if [[ -d "${FFBUILD_DESTDIR:-}" ]]; then
         done
     fi
 
-    # Prune things that must not reach the packaged artifact, BEFORE merging.
+    # Merge this stage's install tree into the shared prefix, *everything*
+    # included: in our single-filesystem model this merge is the only channel
+    # through which a later stage can use an earlier stage's build-time tools.
     #
-    # Upstream does the equivalent of this at the end of its in-container
-    # run_stage (`rm -rf "$FFBUILD_DESTPREFIX"/bin`), and its Dockerfile copies
-    # $FFBUILD_DESTPREFIX into $FFBUILD_PREFIX only in a *later* layer — so bin/
-    # never reaches the prefix. We merge inside this very script, so the prune
-    # has to happen first; otherwise every dependency's CLI tools leak into the
-    # final tarball's bin/ (observed: xz, xzcat, ...).
+    # Upstream can afford to drop bin/ here (`rm -rf "$FFBUILD_DESTPREFIX"/bin`
+    # at the end of its in-container run_stage) because a Docker sub-stage first
+    # hardlink-copies its DESTDIR onto `/`, which makes e.g. glib's
+    # `glib-mkenums` visible to its siblings (pango needs it) while still keeping
+    # it out of the *merged* prefix. We have no such second channel, so pruning
+    # here breaks the build: with it, `50-librsvg/30-pango` fails with
+    # "Dependency 'glib-2.0' tool variable 'glib_mkenums' contains erroneous
+    # value".
     #
-    # share/man is pruned for the same reason: third-party man pages (X11/XCB
-    # man3, ...) are of no use in an FFmpeg artifact, and package_variant copies
-    # $FFBUILD_PREFIX/share/man wholesale. FFmpeg's own man pages are installed
-    # later by `make install`, so they are unaffected.
-    # NOTE: share/man pruning is a deliberate deviation from upstream.
-    rm -rf "$FFBUILD_DESTPREFIX"/bin "$FFBUILD_DESTPREFIX"/share/man
-
-    # Merge this stage's install tree into the shared prefix.
+    # Third-party tools and man pages are therefore pruned once, at packaging
+    # time, in build.sh (see "prune dependency junk") — after every dependency
+    # has been built and before FFmpeg is installed, so FFmpeg's own bin/ and
+    # man1/ are unaffected.
+    #
+    # --remove-destination is load-bearing: this merge runs again whenever a
+    # completed stage is rebuilt (e.g. after deleting its ffbuild/state marker),
+    # and plain `cp -l` refuses to replace a destination that already exists —
+    # it goes straight to link() and fails with EEXIST, which leaves the *old*
+    # files in place while the command exits non-zero. cp -a is the fallback for
+    # a cross-device destination, where hard links are impossible.
     if [[ -d "$FFBUILD_DESTPREFIX" ]]; then
-        cp -al "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/ 2>/dev/null || \
-            cp -a "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/
+        cp -al --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/ ||
+            cp -a --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/
     fi
-fi
-
-# Upstream's 47-vulkan/99-enable stage copies /opt/glslc into /usr/bin/glslc via
-# a Docker layer. Natively we surface it on $PATH instead (see native/env.sh).
-if [[ -s /opt/glslc ]]; then
-    mkdir -p "$FFBUILD_ROOT/bin"
-    ln -sf /opt/glslc "$FFBUILD_ROOT/bin/glslc"
 fi
 
 if [[ -n "${STAGENAME:-}" && -n "${FFBUILD_STAGE_ROOT:-}" ]]; then

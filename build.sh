@@ -46,6 +46,12 @@ source native/env.sh
 # shellcheck source=util/deps.sh
 source util/deps.sh
 
+# Upstream bind-mounts patches/<name> at /patches for a few stages (aom,
+# libaribb24).  Natively the driver repopulates this repo-local dir per stage and
+# the scripts read it through $FFBUILD_PATCHES, so no
+# root-owned /patches is involved.
+export FFBUILD_PATCHES="$FFBUILD_REPO_ROOT/patches-current"
+
 # --- native shim for upstream's Dockerfile emitter --------------------------
 # Addins (e.g. addins/lto.sh) emit `ENV ...` lines via to_df(). Natively we
 # apply those ENV lines directly to the environment instead of writing a
@@ -111,6 +117,23 @@ acquire_lock() {
 acquire_lock
 trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
 
+# A build root carries .done markers and static libraries built by one compiler;
+# reusing it with the other silently mixes object files. Record the compiler on
+# first use and refuse to continue on a mismatch (FFBUILD_CLEAN=1 wipes the root).
+if [[ -n "${FFBUILD_COMPILER:-}" ]]; then
+    if [[ -f "$FFBUILD_ROOT/.compiler" ]]; then
+        _prev_compiler="$(cat "$FFBUILD_ROOT/.compiler" 2>/dev/null || true)"
+        if [[ -n "$_prev_compiler" && "$_prev_compiler" != "$FFBUILD_COMPILER" ]]; then
+            echo "build.sh: $FFBUILD_ROOT was built with $_prev_compiler, now using $FFBUILD_COMPILER" >&2
+            echo "          use FFBUILD_ROOT=... for a separate tree, or FFBUILD_CLEAN=1 to start over" >&2
+            exit 2
+        fi
+    else
+        printf '%s\n' "$FFBUILD_COMPILER" > "$FFBUILD_ROOT/.compiler"
+    fi
+    unset _prev_compiler
+fi
+
 FFMPEG_REPO="${FFMPEG_REPO:-https://github.com/FFmpeg/FFmpeg.git}"
 FFMPEG_REPO="${FFMPEG_REPO_OVERRIDE:-$FFMPEG_REPO}"
 GIT_BRANCH="${GIT_BRANCH:-master}"
@@ -118,7 +141,28 @@ GIT_BRANCH="${GIT_BRANCH_OVERRIDE:-$GIT_BRANCH}"
 
 RPATH_LDEXEFLAGS=''
 if [[ $TARGET == linux* && $VARIANT == *shared* ]]; then
-    RPATH_LDEXEFLAGS=' -Wl,-rpath,\$\$ORIGIN/../lib'
+    # Escaping is load-bearing; this is upstream's exact literal for a reason.
+    # The value travels through three expansions before the linker sees it:
+    #
+    #   1. ./configure itself expands the option value once (shell semantics):
+    #          \\  ->  \        \$  ->  $        \$  ->  $
+    #      so  \ \ \ $ \ $ O R I G I N   becomes   \ $ $ O R I G I N
+    #      and is written to ffbuild/config.mak as  -Wl,-rpath,\$$ORIGIN/../lib
+    #   2. make rewrites `$$` -> `$`, leaving the backslash:  \$ORIGIN
+    #   3. the shell running the link turns `\$` into a literal `$`
+    #
+    # Net result: the linker records `$ORIGIN/../lib`. Drop a backslash and step
+    # 1 yields a bare `$ORIGIN`, which step 3 expands as an unset shell variable —
+    # the binary then silently records `RUNPATH: [/../lib]` or `[../lib]`, and
+    # only works if the process happens to be started from bin/.
+    # `--disable-new-dtags` keeps DT_RPATH instead of DT_RUNPATH.
+    # The shared libav* libraries carry no rpath of their own (verified: same as
+    # upstream), so e.g. libavcodec's NEEDED libswresample/libavutil can only be
+    # resolved through the *executable's* rpath — and only DT_RPATH is consulted
+    # for transitive lookups; DT_RUNPATH is not. Upstream records DT_RPATH
+    # (crosstool-ng's ld defaults to old dtags), while Debian's ld defaults to
+    # new dtags, so we ask for old dtags explicitly to match.
+    RPATH_LDEXEFLAGS=' -Wl,--disable-new-dtags -Wl,-rpath,\\\$\$ORIGIN/../lib'
 fi
 
 # =============================================================== downloads ====
@@ -156,9 +200,8 @@ run_one_script() {
     local CACHE="$FFBUILD_REPO_ROOT/.cache/downloads/${STAGENAME}.tar.xz"
     [[ -f "$CACHE" ]] || CACHE=""
 
-    # Upstream bind-mounts patches/<name> at /patches for a few stages
-    # (see their ffbuild_dockerstage). Probe that declaration and repopulate the
-    # repo-local dir that /patches symlinks to (native/setup.sh creates it).
+    # Probe the stage's own `--mount=src=...,dst=/patches` declaration and
+    # repopulate the dir $FFBUILD_PATCHES points at.
     local PATCHSRC
     PATCHSRC="$(stage_patch_src "$SCRIPT")"
     rm -rf "$FFBUILD_REPO_ROOT/patches-current"
@@ -171,8 +214,11 @@ run_one_script() {
     rm -rf "$FFBUILD_DESTDIR"
     mkdir -p "$FFBUILD_DESTDIR" "$FFBUILD_PREFIX"
 
-    SELF="$SCRIPT" STAGENAME="$STAGENAME" STAGE_CACHE="$CACHE" \
-        bash util/run_stage.sh "$SCRIPT"
+    if ! SELF="$SCRIPT" STAGENAME="$STAGENAME" STAGE_CACHE="$CACHE" \
+            bash util/run_stage.sh "$SCRIPT"; then
+        echo "ERROR: stage $STAGENAME failed; not marking it done" >&2
+        return 1
+    fi
 
     touch "$FFBUILD_STATE/${STAGENAME}.done"
 }
@@ -204,12 +250,22 @@ build_deps() {
     echo "   $(wc -l <<<"$ORDER") stages in dependency order"
 
     for STAGE in $ORDER; do
+        # The graph entry is the aggregator zz-final.sh: it contributes
+        # dependencies but builds nothing, and it is reached here as a *path*
+        # (ffbuild_entry_script prints one), so stage resolution would fail and
+        # report it as skipped. Leave it out instead of printing noise.
+        [[ "$STAGE" == "$ENTRY" ]] && continue
         if ffbuild_stage_skipped "$STAGE"; then
             echo "-- skip (FFBUILD_SKIP_STAGES): $STAGE"
             continue
         fi
+        # A stage can be off for reasons other than the target: the license
+        # variant (x264 under lgpl, fdk-aac outside nonfree), the FFmpeg version
+        # it needs, or an addin. Naming the target alone would blame the wrong
+        # thing, so state what it is not applicable *to* and leave the reason to
+        # the stage itself.
         if ! ffbuild_stage_enabled "$STAGE"; then
-            echo "-- skip (disabled for $TARGET): $STAGE"
+            echo "-- skip (not applicable to $TARGET/$VARIANT): $STAGE"
             continue
         fi
         while IFS= read -r SCRIPT; do
@@ -219,6 +275,8 @@ build_deps() {
         done < <(ffbuild_stage_scripts "$STAGE")
     done
 }
+
+echo "== toolchain: ${FFBUILD_COMPILER:-unknown} (CC=${CC:-?} CXX=${CXX:-?}, mode=${FFBUILD_TOOLCHAIN_MODE:-?}) =="
 
 if [[ -z "${FFBUILD_FFMPEG_ONLY:-}" ]]; then
     build_deps
@@ -258,36 +316,36 @@ FF_LDFLAGS="$(xargs <<< "${FF_LDFLAGS:-}")"
 FF_LDEXEFLAGS="$(xargs <<< "${FF_LDEXEFLAGS:-}")"
 FF_LIBS="$(xargs <<< "${FF_LIBS:-}")"
 
-# Debian's gcc enables -Wl,--as-needed by default, and FFmpeg's configure emits
-# our LDFLAGS (which carry -lm) *before* the objects in its link probes, so that
-# early -lm is discarded. Static libraries whose .pc omits libm then fail the
-# probe, e.g. chromaprint:
-#   undefined reference to symbol 'round@@GLIBC_2.2.5'
-#   /lib/x86_64-linux-gnu/libm.so.6: error adding symbols: DSO missing from command line
-# --extra-libs is appended *after* the libraries (configure: `... $libs $extralibs`),
-# so mirror the mandatory libm there. See also FFBUILD_EXTRA_LDFLAGS.
-FF_LIBS="$(xargs <<< "${FF_LIBS:-} -lm")"
-
-# ==================================================== prune dependency junk ==
-# Dependency stages install their own CLI tools and man pages into the prefix.
-# Strip them here (as well as per-stage, see util/run_stage.sh) so that the
-# artifact carries FFmpeg's own outputs only. This also repairs a prefix built
-# by an earlier run whose stages are now skipped via ffbuild/state.
-rm -rf "$FFBUILD_PREFIX/bin" "$FFBUILD_PREFIX/share/man"
+# Runtime libraries that must come *after* the libraries, e.g. libm (chromaprint)
+# and libstdc++ (davs2). See FFBUILD_EXTRA_LIBS in native/env.sh for why this
+# position is load-bearing: --extra-libs is placed after the library list
+# (configure: `... $libs $extralibs`), whereas the same flag in LDFLAGS lands
+# before it and is dropped by Debian's default -Wl,--as-needed.
+FF_LIBS="$(xargs <<< "${FF_LIBS:-} ${FFBUILD_EXTRA_LIBS:-}")"
 
 # ============================================================ build ffmpeg ==
 FFMPEG_DIR="$FFBUILD_ROOT/ffmpeg"
+# FFmpeg installs into its *own* tree, next to (not inside) the dependency
+# prefix. Upstream gets this split for free from the container layout: stages
+# install to /opt/ffbuild, that tree is merged into the container's /, and
+# FFmpeg is configured with --prefix=/ffbuild/prefix, which is what
+# package_variant reads. With a single shared prefix, packaging copied every
+# dependency's headers, .pc file and stray .so (libglvnd installs
+# libGLdispatch.so*) into the artifact -- visible only for *-shared, since the
+# static variant packages bin/doc/man/presets only.
+FFMPEG_PREFIX="$FFBUILD_ROOT/ffmpeg-prefix"
+rm -rf "$FFMPEG_PREFIX"
 rm -rf "$FFMPEG_DIR"
 git clone --filter=blob:none --branch="$GIT_BRANCH" "$FFMPEG_REPO" "$FFMPEG_DIR"
 cd "$FFMPEG_DIR"
 
 echo "== configuring ffmpeg =="
-./configure --prefix="$FFBUILD_PREFIX" --pkg-config-flags="--static" \
+./configure --prefix="$FFMPEG_PREFIX" --pkg-config-flags="--static" \
     $FFBUILD_TARGET_FLAGS $FF_CONFIGURE \
     --extra-cflags="$FF_CFLAGS" --extra-cxxflags="$FF_CXXFLAGS" --extra-libs="$FF_LIBS" \
     --extra-ldflags="$FF_LDFLAGS" --extra-ldexeflags="$FF_LDEXEFLAGS$RPATH_LDEXEFLAGS" \
     --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --nm="$NM" \
-    --extra-version="$(date +%Y%m%d)" || { cat ffbuild/config.log; exit 1; }
+    --extra-version="$FFBUILD_EXTRA_VERSION" || { cat ffbuild/config.log; exit 1; }
 
 echo "== building ffmpeg =="
 make -j"$FFBUILD_JOBS" V=1
@@ -300,12 +358,23 @@ cd "$FFBUILD_REPO_ROOT"
 ARTIFACTS_PATH="$FFBUILD_REPO_ROOT/artifacts"
 mkdir -p "$ARTIFACTS_PATH"
 
-BUILD_NAME="ffmpeg-$("$FFMPEG_DIR/ffbuild/version.sh" "$FFMPEG_DIR")-${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}"
+BUILD_NAME="ffmpeg-$("$FFMPEG_DIR/ffbuild/version.sh" "$FFMPEG_DIR")-${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}-${FFBUILD_COMPILER:-unknown}-${FFBUILD_BUILD_DATE:-unknown}"
 PKGROOT="$FFBUILD_ROOT/pkgroot/$BUILD_NAME"
 rm -rf "$FFBUILD_ROOT/pkgroot"
 mkdir -p "$PKGROOT"
 
-package_variant "$FFBUILD_PREFIX" "$PKGROOT"
+package_variant "$FFMPEG_PREFIX" "$PKGROOT"
+
+# The variant's sed rewrites the *container* literal /ffbuild/prefix; a native
+# build tree lives at an arbitrary host path, so libdir/includedir would keep it
+# and the .pc files would not be relocatable. Rewrite whatever prefix we
+# actually packaged from, leaving only ${prefix} behind.
+if [[ -d "$PKGROOT/lib/pkgconfig" ]]; then
+    # /^prefix=/! : package_variant already turned that line into
+    # ${pcfiledir}/../..; rewriting it again would make it self-referential.
+    find "$PKGROOT/lib/pkgconfig" -name '*.pc' -print0 |
+        xargs -0 -r sed -i "/^prefix=/!s|$FFMPEG_PREFIX|\${prefix}|g"
+fi
 [[ -n "${LICENSE_FILE:-}" && -f "$FFMPEG_DIR/$LICENSE_FILE" ]] && \
     cp "$FFMPEG_DIR/$LICENSE_FILE" "$PKGROOT/LICENSE.txt"
 

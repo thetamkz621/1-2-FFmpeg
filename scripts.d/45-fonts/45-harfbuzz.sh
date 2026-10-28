@@ -11,7 +11,7 @@ ffbuild_dockerbuild() {
     mkdir build && cd build
 
     local myconf=(
-        --cross-file=/cross.meson
+        --cross-file="$FFBUILD_MESON_CROSS_FILE"
         --prefix="$FFBUILD_PREFIX"
         --buildtype=release
         --default-library=static

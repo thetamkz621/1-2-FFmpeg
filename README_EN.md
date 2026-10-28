@@ -14,10 +14,19 @@ Currently, only the `linux64` target is supported. Upstream's other targets are 
 
 ### Prerequisites
 
-Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root); `setup.sh` installs the
-rest from apt — gcc/g++/clang, autoconf/automake, cmake/meson, python3 and the usual CLI tools.
+Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root). `setup.sh` takes only
+the base toolchain from apt (gcc/g++, clang, python3, git and the usual CLI tools) and builds the
+rest — autoconf, automake, cmake, nasm, yasm, gettext and the Python venv — under `.buildtools/`.
 
 `./native/setup.sh --check` prints the required and optional tool list without changing anything.
+
+> [!IMPORTANT]
+> Requires compiler with C++23 support (like GCC 12 or higher).
+> > Dependency `openal-soft` demands for range constructor for std::string_view `std::string_view`
+> 
+> Requires LLVM 15 or higher.
+> > LLVMgold plugin version (for binutils) must be 15 or higher.   
+> > Otherwise `ar` cannot index Rust bitcode symbols (From dependency `librsvg`).
 
 ### Preparation
 
@@ -33,7 +42,7 @@ rest from apt — gcc/g++/clang, autoconf/automake, cmake/meson, python3 and the
 ./build.sh target variant [addin [addin] [addin] ...]
 ```
 
-On success, the resulting archive will be in `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>].tar.xz`.
+On success, the resulting archive will be in `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler>-<date>.tar.xz`.
 
 ### Targets, Variants and Addins
 
@@ -64,35 +73,42 @@ All of those can be optionally combined with any combination of addins:
 ### Compiler
 
 ```bash
-./build.sh linux64 gpl                              # host gcc/g++, default
-FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl   # glibc 2.28 baseline (unverified)
-CC=clang CXX=clang++ ./build.sh linux64 gpl          # replace the compiler
+FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
+FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # glibc 2.28 baseline (unverified)
 ```
 
 > [!NOTE]
-> `host` (default) uses the system `gcc`/`g++`; `ctng` uses a locally built crosstool-ng
-> toolchain and needs `./native/setup.sh --with-ctng` first — untested so far. `FFBUILD_CC` / `CC` (and
-> `CXX`/`LD`/`AR`/...) replace the compiler. Extra flags: `FFBUILD_EXTRA_CFLAGS`,
-> `FFBUILD_EXTRA_LDFLAGS`. See the resolved configuration with
+> `host` (default) probes `cc`, then `gcc`, then `clang`, with `CXX` following the same family.
+> `clang` / `gcc` only set the host toolchain's defaults, and `ctng` uses a locally built
+> crosstool-ng toolchain — untested so far — and needs `./native/setup.sh --with-ctng` first.
+> `FFBUILD_CC` / `CC` (and `CXX`/`LD`/`AR`/...) override the choice. Extra flags:
+> `FFBUILD_EXTRA_CFLAGS`, `FFBUILD_EXTRA_LDFLAGS`. See the resolved configuration with
 > `source native/env.sh && ffbuild_env_dump`; the full variable list is documented at the
 > top of `native/env.sh`.
 
 ### Set proxy
 
+Proxy settings are inherited from the shell (`http_proxy` / `https_proxy` / `all_proxy`).
+
 ```bash
-FFBUILD_PROXY=http://host:port ./native/download.sh
+FFBUILD_PROXY=http://host:port ./native/download.sh   # override all protocols
+FFBUILD_PROXY= ./native/download.sh                   # ignore the shell's proxy
 ```
 
 > [!IMPORTANT]
-> - `FFBUILD_PROXY` defaults to a private LAN address: override it, or empty it to disable.
 > - `FFBUILD_ROOT` must not contain a dot (upstream's libxcb/libglvnd path handling breaks on it).
 > - Artifacts match the host glibc; ~~use `FFBUILD_TOOLCHAIN_MODE=ctng` for a glibc 2.28 baseline.~~
 > - Building needs no root; deleting the repository removes every build artifact.
+
+> `svn` ignores these variables (it only reads `~/.subversion/servers`), so the lame and xvid
+> stages always connect directly.
 
 ## Project layout
 
 ```
 ffbuild/{prefix,work,log,state,pkgroot}   build root (FFBUILD_ROOT)
+.buildtools/                              managed build tools, not tracked by git
 .cache/downloads/                         dependency source cache
 artifacts/                                build output
 ```

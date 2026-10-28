@@ -14,10 +14,19 @@
 
 ### 前置
 
-Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）；其余由 `setup.sh` 通过 apt 安装——
-gcc/g++/clang、autoconf/automake、cmake/meson、python3 及常用命令行工具。
+Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）。`setup.sh` 只用 apt 装基础工具链
+（gcc/g++、clang、python3、git 及常用命令行工具），其余——autoconf、automake、cmake、nasm、
+yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。
 
 `./native/setup.sh --check` 只报告所需与可选工具，不改动系统。
+
+> [!IMPORTANT]
+> 需要支持 C++23 特性的编译器（例如 GCC 12 或以上版本）
+> > 依赖 `openal-soft` 需要 `std::string_view` 的范围构造
+> 
+> 需要 LLVM 15 或以上版本
+> > binutils 的 LLVMgold 插件版本需 >= 15  
+> > 否则 `ar` 索引不到 Rust bitcode 的符号（来自依赖 `librsvg`）
 
 ### 准备
 
@@ -33,7 +42,7 @@ gcc/g++/clang、autoconf/automake、cmake/meson、python3 及常用命令行工�
 ./build.sh 目标 变体 [附加项 [附加项] [附加项] ...]
 ```
 
-成功后产物位于 `artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>].tar.xz`。
+成功后产物位于 `artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器>-<日期>.tar.xz`。
 
 ### 目标、变体与附加项
 
@@ -64,33 +73,40 @@ gcc/g++/clang、autoconf/automake、cmake/meson、python3 及常用命令行工�
 ### 编译器
 
 ```bash
-./build.sh linux64 gpl                              # 默认使用宿主 gcc/g++
-FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl   # 对齐 glibc 2.28 基线（未验证）
-CC=clang CXX=clang++ ./build.sh linux64 gpl          # 替换编译器
+FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
+FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # 对齐 glibc 2.28 基线（未验证）
 ```
 
 > [!NOTE]
-> `host`（默认）使用宿主 `gcc`/`g++`；`ctng` 使用本地构建的 crosstool-ng 工具链，需先运行
-> `./native/setup.sh --with-ctng`，目前未验证。`FFBUILD_CC` / `CC`（以及 `CXX`/`LD`/`AR` 等）用于替换编译器。
+> `host`（默认）按 `cc` → `gcc` → `clang` 探测，`CXX` 跟随同一家族；`clang` / `gcc` 只设置宿主
+> 工具链的默认值；`ctng` 使用本地构建的 crosstool-ng 工具链（目前未验证），需先运行
+> `./native/setup.sh --with-ctng`。`FFBUILD_CC` / `CC`（以及 `CXX`/`LD`/`AR` 等）可覆盖，
+> 也可指向带版本号的编译器（如 `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`）。
 > 追加 Flag 用 `FFBUILD_EXTRA_CFLAGS`、`FFBUILD_EXTRA_LDFLAGS`。查看最终配置：
 > `source native/env.sh && ffbuild_env_dump`；完整变量表见 `native/env.sh` 顶部注释。
 
 ### 设置代理
 
+默认继承 shell 的代理设置（`http_proxy` / `https_proxy` / `all_proxy`）。
+
 ```bash
-FFBUILD_PROXY=http://host:port ./native/download.sh
+FFBUILD_PROXY=http://host:port ./native/download.sh   # 覆盖所有协议
+FFBUILD_PROXY= ./native/download.sh                   # 忽略 shell 中的代理
 ```
 
 > [!IMPORTANT]
-> - `FFBUILD_PROXY` 默认指向一个内网地址：请显式覆盖，或置空以禁用代理。
 > - `FFBUILD_ROOT` 路径不能包含 `.`（上游 libxcb/libglvnd 的路径处理会出错）。
 > - 产物对齐宿主 glibc；~~需要 glibc 2.28 基线时使用 `FFBUILD_TOOLCHAIN_MODE=ctng`。~~
 > - 构建不需要 root，删除仓库即可清理全部构建产物。
+
+> `svn` 不读取这些变量（只认 `~/.subversion/servers`），因此 lame 与 xvid 两个阶段始终直连。
 
 ## 目录
 
 ```
 ffbuild/{prefix,work,log,state,pkgroot}   构建根（FFBUILD_ROOT）
+.buildtools/                              托管的构建工具，不入库
 .cache/downloads/                         依赖源码缓存
 artifacts/                                产物
 ```

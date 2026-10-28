@@ -36,7 +36,7 @@ ffbuild_dockerbuild() {
 
     if [[ $TARGET == linux64 ]]; then
         myconf+=(
-            --cross-file=/cross.meson
+            --cross-file="$FFBUILD_MESON_CROSS_FILE"
             --default-library=shared
             --sysconfdir="/etc"
             -Ddriverdir="/usr/lib/x86_64-linux-gnu/dri"
@@ -47,7 +47,7 @@ ffbuild_dockerbuild() {
         )
     elif [[ $TARGET == linuxarm64 ]]; then
         myconf+=(
-            --cross-file=/cross.meson
+            --cross-file="$FFBUILD_MESON_CROSS_FILE"
             --default-library=shared
             --sysconfdir="/etc"
             -Ddriverdir="/usr/lib/aarch64-linux-gnu/dri"
@@ -58,7 +58,7 @@ ffbuild_dockerbuild() {
         )
     elif [[ $TARGET == win* ]]; then
         myconf+=(
-            --cross-file=/cross.meson
+            --cross-file="$FFBUILD_MESON_CROSS_FILE"
             --default-library=static
             -Dwith_win32=yes
         )
