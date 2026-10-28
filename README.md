@@ -14,11 +14,21 @@
 
 ### 前置
 
-Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）。`setup.sh` 只用 apt 装基础工具链
+Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）。`setup.sh` 在 apt 宿主上代装基础工具链
 （gcc/g++、clang、python3、git 及常用命令行工具），其余——autoconf、automake、cmake、nasm、
-yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。
+yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。其他发行版只打印安装命令，由使用者自行执行。
 
 `./native/setup.sh --check` 只报告所需与可选工具，不改动系统。
+
+`setup.sh` 的其他选项：
+
+```bash
+./native/setup.sh --print-apt[=all]       # 只打印将要安装的 apt 包
+./native/setup.sh --no-apt                # 包由外部管理，跳过安装
+./native/setup.sh --buildtools-only       # 只建托管构建工具，不写描述文件与构建根
+./native/setup.sh --with-tools=jq,rsync   # 指定要建的工具（默认只补缺失的）
+./native/setup.sh --no-managed-tools      # 不建工具，使用宿主提供的版本
+```
 
 > [!IMPORTANT]
 > 需要支持 C++23 特性的编译器（例如 GCC 12 或以上版本）
@@ -75,7 +85,7 @@ yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。
 ```bash
 FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
 FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
-FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # 对齐 glibc 2.28 基线（未验证）
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng 工具链（未验证）
 ```
 
 > [!NOTE]

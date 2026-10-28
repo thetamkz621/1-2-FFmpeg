@@ -14,11 +14,22 @@ Currently, only the `linux64` target is supported. Upstream's other targets are 
 
 ### Prerequisites
 
-Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root). `setup.sh` takes only
-the base toolchain from apt (gcc/g++, clang, python3, git and the usual CLI tools) and builds the
+Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root). On apt hosts `setup.sh`
+installs the base toolchain (gcc/g++, clang, python3, git and the usual CLI tools) and builds the
 rest — autoconf, automake, cmake, nasm, yasm, gettext and the Python venv — under `.buildtools/`.
+On other distributions it only prints the commands to run.
 
 `./native/setup.sh --check` prints the required and optional tool list without changing anything.
+
+Other `setup.sh` options:
+
+```bash
+./native/setup.sh --print-apt[=all]       # only print the apt packages that would be installed
+./native/setup.sh --no-apt                # packages are managed externally; skip installation
+./native/setup.sh --buildtools-only       # only build the managed tools (no descriptors/build root)
+./native/setup.sh --with-tools=jq,rsync   # build these tools (by default only missing ones)
+./native/setup.sh --no-managed-tools      # build nothing; use whatever the host provides
+```
 
 > [!IMPORTANT]
 > Requires compiler with C++23 support (like GCC 12 or higher).
@@ -75,7 +86,7 @@ All of those can be optionally combined with any combination of addins:
 ```bash
 FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
 FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
-FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # glibc 2.28 baseline (unverified)
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng toolchain (untested)
 ```
 
 > [!NOTE]
