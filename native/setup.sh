@@ -213,7 +213,7 @@ FFBUILD_BT_OCAML_COMPILER="${FFBUILD_BT_OCAML_COMPILER:-ocaml-base-compiler.4.14
 # autoconf / automake / cmake 不在此列：它们可能是 setup 自己构建的托管版本，
 # 由下面的 "build tools" 表按版本下限判定；meson 由 venv 提供，也不在系统工具之列。
 REQUIRED_TOOLS=(gcc g++ make git patch svn tar xz python3 gen-implib git-mini-clone retry-tool)
-OPTIONAL_TOOLS=(clang node 7z xxd)
+OPTIONAL_TOOLS=(node 7z xxd)
 
 do_check() {
     local missing=() t
@@ -283,6 +283,14 @@ do_check() {
         rt_missing "compiler $CC / $CXX (mode $FFBUILD_TOOLCHAIN_MODE)" \
                    "$(tool_hint "${FFBUILD_TOOLCHAIN_MODE/host/gcc}")"
     fi
+    # 默认变体经 50-ffnvcodec 打开 --enable-cuda-llvm，configure 把 nvcc 默认成 clang，
+    # 所以即使宿主编译器是 gcc，clang 也是硬依赖（上游镜像同样把它列为基础包）。
+    if command -v clang >/dev/null 2>&1; then
+        rt_ok "clang (cuda-llvm)      ffnvcodec"
+    else
+        rt_missing "clang (cuda-llvm)      ffnvcodec" "$(tool_hint clang)"
+    fi
+
     if [[ "$FFBUILD_COMPILER" == clang ]]; then
         _libatomic="$("$CC" -print-file-name=libatomic.so 2>/dev/null || true)"
         if [[ "$_libatomic" == /* && -e "$_libatomic" ]]; then
@@ -496,19 +504,19 @@ elif [[ "$PKG_MGR" != "apt-get" ]]; then
     echo "      install the distro packages yourself, then re-run this script:"
     case "$PKG_MGR" in
     dnf)
-        echo "        dnf install gcc gcc-c++ make patch subversion perl-core openssl-devel"
+        echo "        dnf install gcc gcc-c++ make patch subversion perl-core openssl-devel clang llvm"
         echo "        dnf install ant java-headless ocaml ocaml-findlib ocaml-ocamlbuild ocaml-num"
         echo "      (EL8 also needs openssl3-devel; setup falls back to opam when num is missing)"
         ;;
     pacman)
-        echo "        pacman -S base-devel git subversion perl openssl ant jdk-openjdk ocaml ocaml-findlib ocamlbuild"
+        echo "        pacman -S base-devel git subversion perl openssl clang llvm ant jdk-openjdk ocaml ocaml-findlib ocamlbuild"
         ;;
     zypper)
-        echo "        zypper install gcc gcc-c++ make patch subversion perl-core libopenssl-devel ant java-headless ocaml ocaml-findlib ocamlbuild"
+        echo "        zypper install gcc gcc-c++ make patch subversion perl-core libopenssl-devel clang llvm ant java-headless ocaml ocaml-findlib ocamlbuild"
         ;;
     *)
         echo "        gcc/g++, make, patch, subversion, perl core modules, openssl headers,"
-        echo "        ant + JDK, ocaml + findlib + ocamlbuild"
+        echo "        clang/llvm, ant + JDK, ocaml + findlib + ocamlbuild"
         ;;
     esac
     echo "      verify with: ./native/setup.sh --check"
