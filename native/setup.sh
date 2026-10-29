@@ -988,8 +988,24 @@ else
     rm -rf "$implib_tmp"
 fi
 
+setup_fail_summary() {
+    echo
+    echo "== setup finished with ${#SETUP_FAILURES[@]} problem(s) =="
+    printf '%s\n' "${SETUP_FAILURES[@]}" | sort -u | sed 's/^/  - /'
+    echo "  managed build logs : $FFBUILD_BUILDTOOLS_PREFIX/log/"
+    echo "  distro packages    : ./native/setup.sh --check  (per-tool command) / README §2.1"
+    ffbuild_env_dump
+    echo
+    echo "The build will not work until these are resolved."
+}
+
 if [[ "$ONLY_BUILDTOOLS" -eq 1 ]]; then
     echo "note: --buildtools-only set; skipping toolchain descriptors and build root"
+    # 到这里已经跑过 venv 与 Implib.so：它们失败时也得让退出码说实话。
+    if ((${#SETUP_FAILURES[@]})); then
+        setup_fail_summary
+        exit 1
+    fi
     exit 0
 fi
 
@@ -1149,14 +1165,7 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
 fi
 
 if ((${#SETUP_FAILURES[@]})); then
-    echo
-    echo "== setup finished with ${#SETUP_FAILURES[@]} problem(s) =="
-    printf '%s\n' "${SETUP_FAILURES[@]}" | sort -u | sed 's/^/  - /'
-    echo "  managed build logs : $FFBUILD_BUILDTOOLS_PREFIX/log/"
-    echo "  distro packages    : ./native/setup.sh --check  (per-tool command) / README §2.1"
-    ffbuild_env_dump
-    echo
-    echo "The build will not work until these are resolved."
+    setup_fail_summary
     exit 1
 fi
 
