@@ -537,10 +537,16 @@ do_check() {
         esac
     elif [[ -f "$OPAMROOT/default/lib/num/META" ]]; then
         ocaml_ok=2
+    elif command -v ocaml >/dev/null 2>&1 && command -v ocamlfind >/dev/null 2>&1 &&
+         command -v ocamlbuild >/dev/null 2>&1; then
+        # 工具链齐了但 num 缺席：EL8 的仓库里根本没有这个包，装包命令帮不上忙。
+        ocaml_ok=3
     fi
     case "$ocaml_ok" in
     1) rt_ok "OCaml + findlib + num  fftw3 (system)" ;;
     2) rt_ok "OCaml + findlib + num  fftw3 (managed: $OPAMROOT)" ;;
+    3) rt_missing "OCaml num package      fftw3" \
+                   "this distribution has no num package; rerun ./native/setup.sh to provision it through opam in $OPAMROOT" ;;
     *) rt_missing "OCaml + findlib + num  fftw3" \
                    "$(pkg_cmd ocaml); setup installs num through opam when the repo has none" ;;
     esac
@@ -564,9 +570,20 @@ int main(int argc, char **argv) {
         rt_ok "c++23 string_view      openal (CXX=$CXX)"
     else
         cxx_hint="$(pkg_cmd cxx23)"
+        # 装好的新编译器不一定在 PATH 上（RHEL 8 的 gcc-toolset、Ubuntu 的 gcc-12）：
+        # 这时给命令不如给"怎么用它"，否则用户会以为还要再装一个。
+        local _ts _ts_name
         if command -v g++-12 >/dev/null 2>&1; then
-            cxx_hint="$cxx_hint；系统已装 g++-12，可用 FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12 重跑"
+            cxx_hint="g++-12 is installed: rerun with FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12"
+        else
+            for _ts in /opt/rh/gcc-toolset-*/root/usr/bin/g++; do
+                [[ -x "$_ts" ]] || continue
+                _ts_name="${_ts#/opt/rh/}"; _ts_name="${_ts_name%%/*}"
+                cxx_hint="$_ts_name is installed (not on PATH): rerun under 'scl enable $_ts_name bash', or set FFBUILD_CC=${_ts%++} FFBUILD_CXX=$_ts"
+                break
+            done
         fi
+        unset _ts _ts_name
         rt_missing "c++23 string_view      openal (CXX=$CXX)" "$cxx_hint"
     fi
 
