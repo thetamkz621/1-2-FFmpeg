@@ -11,13 +11,14 @@
 #   ./native/setup.sh                 # install core build prerequisites
 #   ./native/setup.sh --all           # also install the optional upstream packages
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
-#   ./native/setup.sh --no-apt        # skip package installation (host manages its own)
+#   ./native/setup.sh --install       # also install packages on non-apt hosts
+#   ./native/setup.sh --no-install    # skip package installation (host manages its own)
 #   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
 #   ./native/setup.sh --with-tools=a,b   # build these build tools even if only some are missing
 #   ./native/setup.sh --no-managed-tools # do not build tools; use whatever the host provides
 #   ./native/setup.sh --check         # only verify what is present
-#   ./native/setup.sh --print-apt     # print the core apt package list and exit
-#   ./native/setup.sh --print-apt=all # ... including the --all extras
+#   ./native/setup.sh --print-packages     # print this distro's install command and exit
+#   ./native/setup.sh --print-packages=all # ... including the --all extras
 #
 set -euo pipefail
 
@@ -29,9 +30,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DO_CHECK=0
 DO_ALL=0
 WITH_CTNG=0
-NO_APT=0
-PRINT_APT=0
-PRINT_APT_ALL=0
+DO_INSTALL=0
+NO_INSTALL=0
+PRINT_PKGS=0
+PRINT_PKGS_ALL=0
 ONLY_BUILDTOOLS=0
 NO_MANAGED_TOOLS=0
 WITH_TOOLS=""
@@ -41,14 +43,15 @@ while [[ $# -gt 0 ]]; do
     --check)      DO_CHECK=1 ;;
     --all)        DO_ALL=1 ;;
     --with-ctng)  WITH_CTNG=1 ;;
-    --no-apt)     NO_APT=1 ;;
-    --print-apt)  PRINT_APT=1 ;;
-    --print-apt=all) PRINT_APT=1; PRINT_APT_ALL=1 ;;
+    --install)    DO_INSTALL=1 ;;
+    --no-install) NO_INSTALL=1 ;;
+    --print-packages)     PRINT_PKGS=1 ;;
+    --print-packages=all) PRINT_PKGS=1; PRINT_PKGS_ALL=1 ;;
     --buildtools-only) ONLY_BUILDTOOLS=1 ;;
     --no-managed-tools) NO_MANAGED_TOOLS=1 ;;
     --with-tools=*)      WITH_TOOLS="${1#*=}" ;;
     --with-tools)        WITH_TOOLS="${2:-}"; shift ;;
-    -h|--help)    sed -n '3,19p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)    sed -n '/^# Usage:/,/^#$/p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "setup.sh: unknown option '$1'" >&2; exit 2 ;;
     esac
     shift
@@ -67,51 +70,146 @@ fi
 asroot() { "${SUDO[@]}" "$@"; }
 
 # ------------------------------------------------------------- pkg manager ----
-# 只在这一步决定“能不能代装”和“给用户哪条命令”。包名与仓库在不同发行版之间差异太大
-# （EL8 的 nasm 在 CRB、有的发行版根本没有 OCaml 的 num 包），逐发行版硬编码不划算。
+# 只在这一步决定"能不能代装"和"给用户哪条命令"。包名与发行版强相关，写死在代码里
+# 必然腐坏（Fedora 44 没有 wget，EL8 的 nasm/ocaml 在 powertools，EL8 的 python
+# 只有 3.6），所以映射表单独放在 pkgdeps.conf，这里只负责读取与探测。
 PKG_MGR=""
 for _pm in apt-get dnf pacman zypper; do
     if command -v "$_pm" >/dev/null 2>&1; then PKG_MGR="$_pm"; break; fi
 done
 unset _pm
 
-# install_hint <apt> <dnf> <pacman> [zypper] -> 一行可直接粘贴的命令
-install_hint() {
-    case "${PKG_MGR:-none}" in
-        apt-get) echo "apt-get install $1" ;;
-        dnf)     echo "dnf install $2" ;;
-        pacman)  echo "pacman -S $3" ;;
-        zypper)  echo "zypper install ${4:-$2}" ;;
-        *)       echo "apt: $1 | dnf: $2 | pacman: $3" ;;
+PKGDEPS_CONF="$HERE/pkgdeps.conf"
+
+# dnf 还要再分一层：RHEL 8 系的仓库布局与 Fedora 不同（powertools、openssl3-devel、
+# python3.12）。按 ID/ID_LIKE 认，认不出的当 Fedora 处理。
+pkg_flavor() {
+    case "$PKG_MGR" in
+        apt-get) echo apt ; return 0 ;;
+        pacman)  echo pacman ; return 0 ;;
+        zypper)  echo zypper ; return 0 ;;
+        dnf)     ;;
+        *)       echo none ; return 0 ;;
     esac
+    local id="" like="" ver="" k v
+    if [[ -r /etc/os-release ]]; then
+        while IFS='=' read -r k v; do
+            v="${v%\"}"; v="${v#\"}"
+            case "$k" in
+                ID)         id="$v" ;;
+                ID_LIKE)    like="$v" ;;
+                VERSION_ID) ver="$v" ;;
+            esac
+        done </etc/os-release
+    fi
+    unset k v
+    case " $id $like " in
+        *" rhel "*|*" centos "*|*" rocky "*|*" almalinux "*|*" ol "*)
+            case "$ver" in 8|8.*) echo dnf-el8; return 0 ;; esac ;;
+    esac
+    echo dnf
+}
+PKG_FLAVOR="$(pkg_flavor)"
+
+# pkgdeps_row <capability> -> 映射表里对应的整行
+pkgdeps_row() {
+    local key="$1" line first
+    [[ -r "$PKGDEPS_CONF" ]] || return 1
+    while IFS= read -r line; do
+        [[ "$line" == *"|"* ]] || continue
+        first="${line%%|*}"
+        first="${first#"${first%%[![:space:]]*}"}"
+        first="${first%"${first##*[![:space:]]}"}"
+        [[ "$first" == "$key" ]] || continue
+        printf '%s\n' "$line"
+        return 0
+    done <"$PKGDEPS_CONF"
+    return 1
+}
+
+# 提示里用的发行版称呼，别再重复一遍包管理器名字
+pkg_flavor_name() {
+    case "$PKG_FLAVOR" in
+        apt)     echo "Debian/Ubuntu" ;;
+        dnf)     echo "Fedora / EL9+" ;;
+        dnf-el8) echo "RHEL 8 family" ;;
+        pacman)  echo "Arch" ;;
+        zypper)  echo "openSUSE" ;;
+        *)       echo "unknown" ;;
+    esac
+}
+
+pkgdeps_col() {
+    case "$PKG_FLAVOR" in
+        apt)    echo 2 ;;
+        dnf)    echo 3 ;;
+        dnf-el8) echo 4 ;;
+        pacman) echo 5 ;;
+        zypper) echo 6 ;;
+        *)      echo 2 ;;
+    esac
+}
+
+# pkg_deps <capability> -> 当前发行版该装的包名（空格分隔，可能为空）
+pkg_deps() {
+    local row col out
+    if ! row="$(pkgdeps_row "$1")"; then
+        echo "pkgdeps.conf: no row for capability '$1'" >&2
+        return 0
+    fi
+    col="$(pkgdeps_col)"
+    out="$(printf '%s\n' "$row" | awk -F'|' -v c="$col" '{print $c; exit}')"
+    out="${out#"${out%%[![:space:]]*}"}"
+    out="${out%"${out##*[![:space:]]}"}"
+    [[ "$out" == "-" ]] && out=""
+    printf '%s\n' "$out"
+}
+
+# RHEL 8 系把 ocaml / nasm / ninja-build 放在 powertools。--enablerepo 只对本次
+# 事务生效，不改用户的仓库配置。
+DNF_REPO_ARGS=()
+if [[ "$PKG_FLAVOR" == dnf-el8 ]] &&
+   dnf -q repolist --all 2>/dev/null | awk '{print $1}' | grep -qx powertools; then
+    DNF_REPO_ARGS=(--enablerepo=powertools)
+fi
+
+# pkg_cmd <capability> -> 一行可直接粘贴的安装命令
+pkg_cmd() {
+    local pkgs
+    pkgs="$(pkg_deps "$1")"
+    if [[ -z "$pkgs" ]]; then
+        echo "(nothing to install)"
+        return 0
+    fi
+    # shellcheck disable=SC2086  # 包名列表就是空格分隔的
+    pkg_cmd_for $pkgs
 }
 
 # tool_hint <tool> -> 单个缺失工具的安装命令
 tool_hint() {
     case "$1" in
-        gcc|g++|make|patch|libtoolize)
-            install_hint "build-essential" "gcc gcc-c++ make patch libtool" "base-devel" ;;
-        ninja)      install_hint ninja-build ninja-build ninja ;;
-        pkg-config) echo "./native/setup.sh（托管）或 $(install_hint pkg-config pkgconf-pkg-config pkgconf)" ;;
-        svn)        install_hint subversion subversion subversion ;;
-        nasm)       install_hint nasm nasm nasm ;;
-        zip)        install_hint zip zip zip ;;
-        tar)        install_hint tar tar tar ;;
-        xz)         install_hint xz-utils xz xz ;;
-        git)        install_hint git git git ;;
-        yasm)       install_hint yasm yasm yasm ;;
-        cmake)      install_hint cmake cmake cmake ;;
-        python3)    install_hint "python3 python3-venv" "python3.12 python3.12-devel" python ;;
-        texinfo|makeinfo) install_hint texinfo texinfo texinfo ;;
-        unzip)      install_hint unzip unzip unzip ;;
-        ant)        install_hint "ant default-jdk-headless" "ant java-17-openjdk-headless" "ant jdk-openjdk" ;;
-        openssl3-devel|openssl-devel|libssl-dev)
-            install_hint "libssl-dev" "openssl-devel (EL8: openssl3-devel)" openssl ;;
-        ocaml)      install_hint "ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev" \
-                                 "ocaml ocaml-findlib ocaml-ocamlbuild" \
-                                 "ocaml ocaml-findlib ocamlbuild" ;;
-        clang)      install_hint clang clang clang ;;
-        libatomic)  install_hint "libatomic1 gcc" libatomic gcc ;;
+        gcc|g++|make|patch|libtoolize) pkg_cmd toolchain ;;
+        ninja)      pkg_cmd ninja ;;
+        pkg-config) echo "./native/setup.sh (managed) or $(pkg_cmd pkgconf)" ;;
+        svn)        pkg_cmd subversion ;;
+        nasm)       pkg_cmd nasm ;;
+        zip)        pkg_cmd zip ;;
+        tar)        pkg_cmd archivers ;;
+        xz)         pkg_cmd archivers ;;
+        git)        pkg_cmd git ;;
+        yasm)       pkg_cmd yasm ;;
+        cmake)      pkg_cmd cmake ;;
+        python3)    pkg_cmd python ;;
+        texinfo|makeinfo) pkg_cmd texinfo ;;
+        unzip)      pkg_cmd unzip ;;
+        ant)        pkg_cmd java_ant ;;
+        openssl3-devel|openssl-devel|libssl-dev) pkg_cmd openssl_dev ;;
+        ocaml)      pkg_cmd ocaml ;;
+        clang)      pkg_cmd clang ;;
+        libatomic)  pkg_cmd libatomic ;;
+        xxd)        pkg_cmd xxd ;;
+        curl)       pkg_cmd curl ;;
+        wget)       pkg_cmd wget ;;
         *)          echo "install it with your package manager (README §2.1)" ;;
     esac
 }
@@ -137,63 +235,118 @@ version_ge() {  # $1 >= $2 (version sort)
 }
 
 # --------------------------------------------------------------- packages -----
-# Package names target Debian 13 (trixie) and Ubuntu 24.04 (noble); entries that
-# the running distro does not have are filtered out, so one list serves both.
-#
-# Build-time Python (meson / jinja2 / jsonschema) is deliberately absent: it lives
-# in the repo-local venv, which is prepended to PATH for every build (see the
-# "python" section below). Only the interpreter and the venv tooling come from the
-# distro, so a host never ends up with two half-populated Python environments.
-#
-# APT_CORE is what the default target graph actually needs; APT_EXTRA is everything
-# else upstream's image carries, installed only with --all. Nothing is dropped just
-# because today's linux64 gpl build happens not to use it — the other targets and
-# variants have not been exercised yet, and upstream installing it is evidence
-# enough to keep it one flag away.
-APT_CORE=(
+# 装什么由 pkgdeps.conf 决定；这里只声明"默认图需要哪些能力"和"--all 额外给哪些"。
+# 默认图 = linux64 gpl；其余 target/variant 尚未全部跑通，上游镜像带的东西保持
+# 在 --all 一侧，别因为今天的默认图用不到就把它们删掉。
+PKG_KEYS_CORE=(
     # 自举根：没有这些就什么都编不了
-    build-essential zlib1g-dev libssl-dev
-    # 网络与归档（wget 是 setup 自己的下载兜底）
-    git curl wget ca-certificates
-    tar xz-utils
-    # Python 运行时：构建期模块由 venv 提供，发行版只管解释器与建 venv
-    python3 python3-dev python3-pip python3-venv python3-setuptools
-    python-is-python3
+    toolchain zlib_dev openssl_dev pkgconf
+    # 网络与归档
+    git curl wget ca_certificates archivers
+    # Python 运行时：构建期模块由 venv 提供，发行版只管解释器与建 venv 的部件
+    python
     # --enable-cuda-llvm：configure 把 nvcc 默认成 clang
-    clang llvm
-    # 默认图要 OCaml（fftw3 的 genfft）与 Java + ant（libbluray 的 BD-J jar）
-    ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev
-    default-jdk-headless ant
+    clang
+    # 默认图要 OCaml（fftw3 的 genfft）与 Java + ant（libbluray 的 BD-J）
+    ocaml java_ant
     # lame / xvid 两个 stage 走 svn checkout
     subversion
+    # 托管构建工具自建，但编它们要用 perl 核心模块
+    perl_core
 )
-APT_EXTRA=(
+PKG_KEYS_EXTRA=(
     # 上游镜像有、当前默认图用不到；--all 时装上
-    p7zip-full libarchive-tools xxd libxml2-utils mercurial
+    p7zip bsdtar xxd libxml2_tools mercurial
     # 上游与 clang/llvm 同组：覆盖率、交叉产物试运行、32 位目标的多架构
-    lcov lld qemu-user gcc-multilib g++-multilib
+    lcov lld qemu_user multilib
     # 自建 libtool 只装 libtool / libtoolize，ltdl 头文件仍由发行版提供
-    libltdl-dev
+    libltdl
     # install-doc 的 HTML 通道；缺了 build.sh 只告警
     texi2html
     # 上游装 nodesource 的 nodejs 与 python3-apt；仓库内零引用，保持能力对齐
-    python3-apt nodejs
-    gtk-doc-tools gobject-introspection itstool
+    python3_apt nodejs
+    gtk_doc gobject_introspection itstool
 )
 
-apt_available() { apt-cache show "$1" >/dev/null 2>&1; }
-
-filter_available() {
-    local p out=()
-    for p in "$@"; do apt_available "$p" && out+=("$p"); done
-    printf '%s\n' "${out[@]}"
+# pkg_available <pkg> -> 0 可用 / 1 该发行版没有 / 2 无法判断（元数据未就绪）
+#
+# dnf 用 --whatprovides 而不是 list：Fedora 44 已经没有 zlib-devel 这个包，它由
+# zlib-ng-compat-devel 提供；按包名查会误判成"没有"。--cacheonly 保证这一步不
+# 触网；缓存不存在时返回 2，让调用方把包原样交给包管理器去判断。
+pkg_available() {
+    local pkg="$1" out
+    case "$PKG_MGR" in
+    apt-get)
+        apt-cache show "$pkg" >/dev/null 2>&1
+        ;;
+    dnf)
+        if rpm -q "$pkg" >/dev/null 2>&1; then return 0; fi
+        out="$(dnf -q --cacheonly "${DNF_REPO_ARGS[@]}" repoquery --available --whatprovides "$pkg" 2>/dev/null)" || return 2
+        [[ -n "$out" ]]
+        ;;
+    pacman)
+        if pacman -Q "$pkg" >/dev/null 2>&1; then return 0; fi
+        pacman -Si "$pkg" >/dev/null 2>&1
+        ;;
+    zypper)
+        if rpm -q "$pkg" >/dev/null 2>&1; then return 0; fi
+        zypper --quiet search --match-exact "$pkg" >/dev/null 2>&1
+        ;;
+    *)
+        return 2
+        ;;
+    esac
 }
 
-if [[ "$PRINT_APT" -eq 1 ]]; then
-    printf '%s\n' "${APT_CORE[@]}" | sort -u
-    if [[ "$PRINT_APT_ALL" -eq 1 ]]; then
-        printf '%s\n' "${APT_EXTRA[@]}" | sort -u
+# pkg_expand -> 选中的能力展开成包名（去重，保持声明顺序）
+pkg_expand() {
+    local k p
+    local -A seen=()
+    local -a out=()
+    for k in "${PKG_KEYS_CORE[@]}"; do
+        # 包名列表就是空格分隔的，这里要的正是分词
+        # shellcheck disable=SC2046
+        for p in $(pkg_deps "$k"); do
+            [[ -n "${seen[$p]:-}" ]] && continue
+            seen[$p]=1; out+=("$p")
+        done
+    done
+    if (( PRINT_PKGS_ALL || DO_ALL )); then
+        for k in "${PKG_KEYS_EXTRA[@]}"; do
+            # shellcheck disable=SC2046
+            for p in $(pkg_deps "$k"); do
+                [[ -n "${seen[$p]:-}" ]] && continue
+                seen[$p]=1; out+=("$p")
+            done
+        done
     fi
+    ((${#out[@]})) && printf '%s\n' "${out[@]}"
+    return 0
+}
+
+# pkg_cmd_for <pkg...> -> 一行可直接粘贴的安装命令
+pkg_cmd_for() {
+    (($#)) || return 0
+    case "${PKG_MGR:-none}" in
+        apt-get) printf 'apt-get install -y --no-install-recommends %s\n' "$*" ;;
+        dnf)     if ((${#DNF_REPO_ARGS[@]})); then
+                     printf 'dnf install -y %s %s\n' "${DNF_REPO_ARGS[*]}" "$*"
+                 else
+                     printf 'dnf install -y %s\n' "$*"
+                 fi ;;
+        pacman)  printf 'pacman -S --needed %s\n' "$*" ;;
+        zypper)  printf 'zypper install %s\n' "$*" ;;
+        *)       printf '%s\n' "$*" ;;
+    esac
+}
+
+if [[ "$PRINT_PKGS" -eq 1 ]]; then
+    mapfile -t _print_pkgs < <(pkg_expand)
+    if ((${#_print_pkgs[@]} == 0)); then
+        echo "# no packages needed for $PKG_FLAVOR (${PKG_MGR:-unknown})"
+        exit 0
+    fi
+    pkg_cmd_for "${_print_pkgs[@]}"
     exit 0
 fi
 
@@ -310,7 +463,7 @@ do_check() {
         rt_ok "python venv module      $py_sys"
     else
         rt_missing "python venv module      build venv ($py_sys)" \
-                   "$(install_hint "python3-venv" "python3.12-pip" python)"
+                   "$(pkg_cmd python_venv)"
     fi
 
     # 用 pyvenv.cfg 判断"venv 是否存在"：只测 bin/python3 会把残缺的 venv
@@ -344,7 +497,7 @@ do_check() {
         rt_ok "perl core modules      openssl / autoconf"
     else
         rt_missing "perl core modules      openssl / autoconf" \
-                   "dnf install perl-core  |  apt-get install perl"
+                   "$(pkg_cmd perl_core)"
     fi
 
     # makeinfo / autopoint 由托管工具提供；没建之前不该让用户去装系统包。
@@ -369,7 +522,7 @@ do_check() {
         printf '  %-9s autopoint >= 0.21      built by native/buildtools.d (gettext)\n' "[managed]"
     else
         rt_missing "autopoint >= 0.21      zvbi" \
-                   "dnf install gettext-devel  |  apt-get install autopoint"
+                   "$(pkg_cmd autopoint)"
     fi
 
     ocaml_ok=0
@@ -389,7 +542,7 @@ do_check() {
     1) rt_ok "OCaml + findlib + num  fftw3 (system)" ;;
     2) rt_ok "OCaml + findlib + num  fftw3 (managed: $OPAMROOT)" ;;
     *) rt_missing "OCaml + findlib + num  fftw3" \
-                   "apt install ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev | dnf install ocaml ocaml-findlib ocaml-ocamlbuild ocaml-num | pacman -S ocaml ocaml-findlib ocamlbuild; setup installs num through opam when the repo has none" ;;
+                   "$(pkg_cmd ocaml); setup installs num through opam when the repo has none" ;;
     esac
 
     # 依赖里已经有 C++23 的用法（openal-soft 用 string_view 的范围构造）。直接
@@ -410,7 +563,7 @@ int main(int argc, char **argv) {
     if printf '%s\n' "$cxx_probe" | "$CXX" -std=gnu++20 -x c++ -fsyntax-only - >/dev/null 2>&1; then
         rt_ok "c++23 string_view      openal (CXX=$CXX)"
     else
-        cxx_hint="$(install_hint "gcc-12 g++-12" "gcc-toolset-12" "gcc")"
+        cxx_hint="$(pkg_cmd cxx23)"
         if command -v g++-12 >/dev/null 2>&1; then
             cxx_hint="$cxx_hint；系统已装 g++-12，可用 FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12 重跑"
         fi
@@ -431,7 +584,7 @@ int main(int argc, char **argv) {
     done
     if (( gold_bad )); then
         rt_missing "llvm bfd plugin >= 15  rust 静态库" \
-                   "$(install_hint "llvm-15" "llvm-toolset-15" "llvm")；或移除 /usr/lib/bfd-plugins/LLVMgold*.so，让 bfd 读原生符号表"
+                   "$(pkg_cmd llvm_bfd); or remove /usr/lib/bfd-plugins/LLVMgold*.so so that bfd reads native symbol tables"
     else
         rt_ok "llvm bfd plugin       rust 静态库"
     fi
@@ -488,66 +641,71 @@ int main(int argc, char **argv) {
 }
 
 # ------------------------------------------------------- package install -----
-# 只代装 apt 能装的东西。其他发行版不猜包名、也不去碰 sudo，直接把命令打给用户 ——
-# 猜错的代价（装错包、改坏仓库、在无 tty 时抛 sudo 错误）比省下的几步大得多。
-# --no-apt 供“包由外部管理”的宿主使用；其余步骤照常进行。
-APT_OK=1
+# apt 宿主默认代装（历史行为）；其他发行版默认只打印命令，--install 才动手。猜错
+# 包名的代价（装错包、改坏仓库、无 tty 时抛 sudo 错误）比省下的几步大。
+INSTALL_OK=1
 if [[ "$DO_CHECK" -eq 1 ]]; then
-    # --check is read-only: never install anything while diagnosing.
-    APT_OK=0
-elif [[ "$NO_APT" -eq 1 ]]; then
-    APT_OK=0
-    echo "note: --no-apt: skipping package installation (tools must already be present)"
-elif [[ "$PKG_MGR" != "apt-get" ]]; then
-    APT_OK=0
-    echo "note: no apt here (detected: ${PKG_MGR:-none}) — this script only installs packages on apt hosts."
-    echo "      install the distro packages yourself, then re-run this script:"
-    case "$PKG_MGR" in
-    dnf)
-        echo "        dnf install gcc gcc-c++ make patch subversion perl-core openssl-devel clang llvm"
-        echo "        dnf install ant java-headless ocaml ocaml-findlib ocaml-ocamlbuild ocaml-num"
-        echo "      (EL8 also needs openssl3-devel; setup falls back to opam when num is missing)"
-        ;;
-    pacman)
-        echo "        pacman -S base-devel git subversion perl openssl clang llvm ant jdk-openjdk ocaml ocaml-findlib ocamlbuild"
-        ;;
-    zypper)
-        echo "        zypper install gcc gcc-c++ make patch subversion perl-core libopenssl-devel clang llvm ant java-headless ocaml ocaml-findlib ocamlbuild"
-        ;;
-    *)
-        echo "        gcc/g++, make, patch, subversion, perl core modules, openssl headers,"
-        echo "        clang/llvm, ant + JDK, ocaml + findlib + ocamlbuild"
-        ;;
-    esac
-    echo "      verify with: ./native/setup.sh --check"
-else
-    echo "== installing build prerequisites (apt) =="
-    if ! asroot apt-get update; then
-        APT_OK=0
-        echo "WARNING: 'apt-get update' failed; skipping apt-based installation." >&2
-        echo "         Run './native/setup.sh --check' to see what is already present." >&2
+    # --check 是只读诊断：任何情况下都不动系统。
+    INSTALL_OK=0
+elif [[ "$NO_INSTALL" -eq 1 ]]; then
+    INSTALL_OK=0
+    echo "note: --no-install: skipping package installation (tools must already be present)"
+elif [[ "$PKG_MGR" != "apt-get" && "$DO_INSTALL" -ne 1 ]]; then
+    INSTALL_OK=0
+    echo "note: detected ${PKG_MGR:-unknown package manager} ($(pkg_flavor_name)); this script only installs packages on apt hosts by default."
+    echo "      packages this host needs (install them yourself, or add --install):"
+    mapfile -t _hint_pkgs < <(pkg_expand)
+    if ((${#_hint_pkgs[@]})); then
+        pkg_cmd_for "${_hint_pkgs[@]}" | sed 's/^/        /'
+    else
+        echo "        (no column for $PKG_FLAVOR in pkgdeps.conf)"
+    fi
+    echo "      verify afterwards with ./native/setup.sh --check"
+    unset _hint_pkgs
+fi
+
+if [[ "$INSTALL_OK" -eq 1 ]]; then
+    if [[ "$PKG_MGR" == apt-get ]]; then
+        echo "== installing build prerequisites (apt) =="
+        if ! asroot apt-get update; then
+            INSTALL_OK=0
+            echo "WARNING: 'apt-get update' failed; skipping apt-based installation." >&2
+            echo "         Run './native/setup.sh --check' to see what is already present." >&2
+        fi
+    else
+        echo "== installing build prerequisites ($PKG_FLAVOR) =="
     fi
 fi
 
-if [[ "$APT_OK" -eq 1 ]]; then
-    PKGS=("${APT_CORE[@]}")
-    [[ "$DO_ALL" -eq 1 ]] && PKGS+=("${APT_EXTRA[@]}")
-
-    MAPFILE_PKGS=()
-    while IFS= read -r p; do [[ -n "$p" ]] && MAPFILE_PKGS+=("$p"); done < <(filter_available "${PKGS[@]}")
-
-    SKIPPED=()
-    for p in "${PKGS[@]}"; do
-        apt_available "$p" || SKIPPED+=("$p")
+if [[ "$INSTALL_OK" -eq 1 ]]; then
+    mapfile -t _want < <(pkg_expand)
+    _keep=() _drop=() _unknown=()
+    for _p in "${_want[@]}"; do
+        _rc=0
+        pkg_available "$_p" || _rc=$?
+        case "$_rc" in
+            0) _keep+=("$_p") ;;
+            1) _drop+=("$_p") ;;
+            *) _unknown+=("$_p"); _keep+=("$_p") ;;
+        esac
     done
-
-    if ((${#MAPFILE_PKGS[@]})); then
-        asroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${MAPFILE_PKGS[@]}" \
-            || echo "WARNING: 'apt-get install' failed; run './native/setup.sh --check' to see what is missing" >&2
+    if ((${#_drop[@]})); then
+        echo "note: not in the configured repositories, skipped: ${_drop[*]}"
     fi
-    if ((${#SKIPPED[@]})); then
-        echo "note: not available in this distro, skipped: ${SKIPPED[*]}"
+    if ((${#_unknown[@]})); then
+        echo "note: repository metadata is not cached; ${#_unknown[@]} package(s) go to the package manager unchecked"
     fi
+    if ((${#_keep[@]})); then
+        case "$PKG_MGR" in
+            apt-get) asroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${_keep[@]}" ;;
+            dnf)     asroot dnf install -y "${DNF_REPO_ARGS[@]}" "${_keep[@]}" ;;
+            pacman)  asroot pacman -S --needed --noconfirm "${_keep[@]}" ;;
+            zypper)  asroot zypper --non-interactive install "${_keep[@]}" ;;
+        esac || {
+            echo "WARNING: package installation failed; run './native/setup.sh --check' to see what is missing" >&2
+        }
+    fi
+    unset _p _rc _want _keep _drop _unknown
 fi
 
 # ------------------------------------------------------------ env contract ---
@@ -732,8 +890,7 @@ done
 unset _c _cand _v _sys_path
 if [[ -z "$PYBIN" ]]; then
     echo "ERROR: no python >= $PY_MIN found; it is needed to host the build venv." >&2
-    echo "  Rocky/RHEL 8:  sudo dnf install python3.12" >&2
-    echo "  Debian/Ubuntu: sudo apt-get install python3" >&2
+    echo "  $(pkg_cmd python)" >&2
     exit 1
 fi
 
