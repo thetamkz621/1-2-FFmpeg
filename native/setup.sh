@@ -330,15 +330,20 @@ do_check() {
         rt_ok "build venv             not created yet (setup creates it)"
     fi
 
-    if perl -MTime::Piece -e1 2>/dev/null; then
-        rt_ok "perl(Time::Piece)      openssl"
+    # 发行版会把 Perl 核心模块拆包（Fedora 的 perl 只装解释器）。autoconf 的
+    # autom4te 需要的不止 Time::Piece，这里一次探测几个实际会用到的。
+    if perl -MTime::Piece -MFile::Compare -MData::Dumper -MFile::Temp -MEncode -e1 2>/dev/null; then
+        rt_ok "perl core modules      openssl / autoconf"
     else
-        rt_missing "perl(Time::Piece)      openssl" \
-                   "dnf install 'perl(Time::Piece)'  |  apt-get install perl"
+        rt_missing "perl core modules      openssl / autoconf" \
+                   "dnf install perl-core  |  apt-get install perl"
     fi
 
+    # makeinfo / autopoint 由托管工具提供；没建之前不该让用户去装系统包。
     if command -v makeinfo >/dev/null 2>&1; then
         rt_ok "makeinfo (texinfo)     gmp 等 autotools 文档"
+    elif (( ! NO_MANAGED_TOOLS )); then
+        printf '  %-9s makeinfo (texinfo)     built by native/buildtools.d\n' "[managed]"
     else
         rt_missing "makeinfo (texinfo)     autotools 文档" "$(tool_hint texinfo)"
     fi
@@ -352,6 +357,8 @@ do_check() {
     ap_ver="$(probe_version autopoint --version | awk '{print $NF}')"
     if [[ -n "$ap_ver" ]] && version_ge "$ap_ver" "0.21"; then
         rt_ok "autopoint >= 0.21      zvbi (found $ap_ver)"
+    elif (( ! NO_MANAGED_TOOLS )); then
+        printf '  %-9s autopoint >= 0.21      built by native/buildtools.d (gettext)\n' "[managed]"
     else
         rt_missing "autopoint >= 0.21      zvbi" \
                    "dnf install gettext-devel  |  apt-get install autopoint"
@@ -374,7 +381,7 @@ do_check() {
     1) rt_ok "OCaml + findlib + num  fftw3 (system)" ;;
     2) rt_ok "OCaml + findlib + num  fftw3 (managed: $OPAMROOT)" ;;
     *) rt_missing "OCaml + findlib + num  fftw3" \
-                   "apt install ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev | dnf install ocaml ocaml-findlib ocaml-ocamlbuild (num has no rpm) | pacman -S ocaml ocaml-findlib ocamlbuild; setup.sh provisions it through opam when num is missing" ;;
+                   "apt install ocaml ocaml-findlib ocamlbuild libnum-ocaml-dev | dnf install ocaml ocaml-findlib ocaml-ocamlbuild ocaml-num | pacman -S ocaml ocaml-findlib ocamlbuild; setup installs num through opam when the repo has none" ;;
     esac
 
     # 依赖里已经有 C++23 的用法（openal-soft 用 string_view 的范围构造）。直接
@@ -421,16 +428,17 @@ int main(int argc, char **argv) {
         rt_ok "llvm bfd plugin       rust 静态库"
     fi
 
-    # cargo-c needs OpenSSL 3 *development* files, not the CLI: on EL8 the
-    # system openssl stays at 1.1.1 while openssl3-devel provides a parallel
-    # tree that setup points openssl-sys at.
+    # cargo-c needs OpenSSL 3 *development* files, not the CLI: a host can have
+    # the openssl3 binary without any headers (Fedora's openssl-devel is
+    # separate). On EL8 the system tree stays at 1.1.1 and openssl3-devel
+    # installs a parallel one that setup points openssl-sys at.
     ossl_ver="$(openssl version 2>/dev/null | awk '{print $2}')"
-    if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3"; then
-        rt_ok "OpenSSL >= 3           cargo-c (found $ossl_ver)"
+    if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3" && [[ -f /usr/include/openssl/ssl.h ]]; then
+        rt_ok "OpenSSL >= 3 (dev)     cargo-c (found $ossl_ver)"
     elif [[ -f /usr/include/openssl3/openssl/ssl.h ]]; then
         rt_ok "OpenSSL 3 dev tree     cargo-c (/usr/include/openssl3, system $ossl_ver)"
     else
-        rt_missing "OpenSSL >= 3           cargo-c" "$(tool_hint openssl3-devel)" optional
+        rt_missing "OpenSSL >= 3 (dev)     cargo-c" "$(tool_hint openssl3-devel)"
     fi
     unset -f rt_ok rt_missing
     echo
@@ -484,11 +492,26 @@ elif [[ "$NO_APT" -eq 1 ]]; then
     echo "note: --no-apt: skipping package installation (tools must already be present)"
 elif [[ "$PKG_MGR" != "apt-get" ]]; then
     APT_OK=0
-    echo "note: no apt here (detected: ${PKG_MGR:-none}) — install distro packages yourself, then re-run --check"
-    echo "      $(install_hint \
-        "build-essential pkg-config m4 perl python3 nasm yasm cmake ninja-build texinfo ant default-jdk-headless" \
-        "powertools: nasm yasm ninja-build gperf help2man; gcc gcc-c++ make patch m4 perl python3.12 cmake texinfo ant java-17-openjdk-headless" \
-        "base-devel pkgconf m4 perl python nasm yasm cmake ninja texinfo ant jdk-openjdk")"
+    echo "note: no apt here (detected: ${PKG_MGR:-none}) — this script only installs packages on apt hosts."
+    echo "      install the distro packages yourself, then re-run this script:"
+    case "$PKG_MGR" in
+    dnf)
+        echo "        dnf install gcc gcc-c++ make patch subversion perl-core openssl-devel"
+        echo "        dnf install ant java-headless ocaml ocaml-findlib ocaml-ocamlbuild ocaml-num"
+        echo "      (EL8 also needs openssl3-devel; setup falls back to opam when num is missing)"
+        ;;
+    pacman)
+        echo "        pacman -S base-devel git subversion perl openssl ant jdk-openjdk ocaml ocaml-findlib ocamlbuild"
+        ;;
+    zypper)
+        echo "        zypper install gcc gcc-c++ make patch subversion perl-core libopenssl-devel ant java-headless ocaml ocaml-findlib ocamlbuild"
+        ;;
+    *)
+        echo "        gcc/g++, make, patch, subversion, perl core modules, openssl headers,"
+        echo "        ant + JDK, ocaml + findlib + ocamlbuild"
+        ;;
+    esac
+    echo "      verify with: ./native/setup.sh --check"
 else
     echo "== installing build prerequisites (apt) =="
     if ! asroot apt-get update; then
@@ -526,7 +549,11 @@ if [[ "$DO_CHECK" -eq 1 ]]; then
     export FFBUILD_ENV_CHECK_ONLY=1
 fi
 # shellcheck source=native/env.sh
-source "$HERE/env.sh"
+if ! source "$HERE/env.sh"; then
+    echo "setup.sh: build environment is incomplete — install the packages listed above" >&2
+    echo "          (or run ./native/setup.sh --check), then re-run this script" >&2
+    exit 2
+fi
 
 if [[ -n "${FFBUILD_IGNORED_CARGO_HOME:-}${FFBUILD_IGNORED_RUSTUP_HOME:-}" ]]; then
     echo "note: ignoring CARGO_HOME/RUSTUP_HOME from the environment; build caches stay under $FFBUILD_BUILDTOOLS_PREFIX"
