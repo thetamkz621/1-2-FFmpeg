@@ -60,6 +60,13 @@ done
 # ---------------------------------------------------------------- sudo --------
 if [[ "$(id -u)" -eq 0 ]]; then
     SUDO=()
+    # 容器里 root 是常态，不拦；但 .buildtools/ 与 ffbuild/ 会归 root，之后普通用户
+    # 再跑会撞权限错误（编译工具时表现为莫名其妙的 "C compiler" 失败）。
+    if [[ "$DO_CHECK" -eq 0 && "$PRINT_PKGS" -eq 0 ]]; then
+        echo "WARNING: running as root: .buildtools/ and ffbuild/ will be owned by root," >&2
+        echo "         and a later run as a normal user will fail on permissions." >&2
+        echo "         Run this script as your own user; sudo is only used to install packages." >&2
+    fi
 else
     SUDO=(sudo)
     if ! command -v sudo >/dev/null 2>&1; then
