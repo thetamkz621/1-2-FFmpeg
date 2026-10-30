@@ -10,31 +10,24 @@
 
 仅支持 `linux64` 目标。上游的其余目标仍保留，但未经验证。
 
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [安装构建环境](docs/setup.md) | 前置、各发行版装什么包、`setup.sh` 的全部选项、`--check` 怎么读 |
+| [构建](docs/build.md) | 编译器与工具链模式、构建控制变量、目录布局、源码缓存 |
+| [常见失败](docs/troubleshooting.md) | C++23、LLVMgold、OCaml num、权限问题、弱依赖 |
+
 ## 构建方法
 
 ### 前置
 
-Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）。`setup.sh` 在 apt 宿主上代装基础工具链
-（gcc/g++、clang、python3、git 及常用命令行工具），其余——autoconf、automake、cmake、nasm、
-yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。
+x86_64 Linux 主机，需要 `bash`、`git` 与 python 3.10 或以上。`setup.sh` 负责装发行版包
+（apt 宿主直接装，其余宿主默认只打印命令，加 `--install` 才代装），并在 `.buildtools/`
+下自建 24 个构建工具、Python venv 与 rust 工具链。
 
-Fedora/EL、Arch、openSUSE 等宿主默认只打印本机需要安装的包，不动 sudo；加 `--install` 才代装。
-包名映射在 `native/pkgdeps.conf`（每行一个能力，按 apt / dnf / dnf-el8 / pacman / zypper 分列，
-`-` 表示该发行版没有这个包），改包名只需要改那一张表。RHEL 8 系用 `python3.12` 与
-`openssl3-devel`，setup 在安装时自动带上 `--enablerepo=powertools`。
-
-`./native/setup.sh --check` 只报告所需与可选工具，不改动系统。
-
-`setup.sh` 的其他选项：
-
-```bash
-./native/setup.sh --print-packages[=all]  # 打印本机可直接粘贴的安装命令
-./native/setup.sh --install               # 非 apt 宿主也代装（默认只打印命令）
-./native/setup.sh --no-install            # 包由外部管理，跳过安装
-./native/setup.sh --buildtools-only       # 只建托管构建工具，不写描述文件与构建根
-./native/setup.sh --with-tools=jq,rsync   # 指定要建的工具（默认只补缺失的）
-./native/setup.sh --no-managed-tools      # 不建工具，使用宿主提供的版本
-```
+> 构建不需要 root；删掉仓库即可清掉全部构建产物（`setup.sh` 装的发行版包仍留在系统里）。
+> 各发行版的包名、全部选项与排错见 [docs/setup.md](docs/setup.md)。
 
 > [!IMPORTANT]
 > 需要支持 C++23 特性的编译器（例如 GCC 12 或以上版本）
@@ -44,18 +37,12 @@ Fedora/EL、Arch、openSUSE 等宿主默认只打印本机需要安装的包，�
 > > binutils 的 LLVMgold 插件版本需 >= 15  
 > > 否则 `ar` 索引不到 Rust bitcode 的符号（来自依赖 `librsvg`）
 
-### 准备
+### 快速开始
 
 ```bash
-./native/setup.sh          # 安装构建前置依赖并打印最终配置
-./native/setup.sh --check
-./native/download.sh       # 拉取依赖源码（内容哈希缓存）
-```
-
-### 开始构建
-
-```bash
-./build.sh 目标 变体 [附加项 [附加项] [附加项] ...]
+./native/setup.sh --check   # 只读诊断：缺什么、怎么装
+./native/setup.sh           # apt 宿主直接装；其他宿主只打印命令（加 --install 代装）
+./build.sh linux64 gpl      # 取源码并构建
 ```
 
 成功后产物位于 `artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器>-<日期>.tar.xz`。
@@ -82,7 +69,7 @@ Fedora/EL、Arch、openSUSE 等宿主默认只打印本机需要安装的包，�
 * `nonfree-shared` 同上，使用 nonfree 依赖集。
 
 以上变体均可与任意附加项组合：
-* `4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1`/`8.0`/`8.1`/`9.0` 从对应 release 分支而非 master 构建。
+* `4.3`/`4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1`/`8.0`/`8.1`/`9.0` 从对应 release 分支而非 master 构建。
 * `debug` 不剥离调试符号，产物体积约增加 250MB。
 * `lto` 对所有依赖与 ffmpeg 使用 -flto=auto（高度实验性，Windows 上不可用，Linux 上有时可行）。
 
@@ -100,7 +87,8 @@ FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng 工具链�
 > `./native/setup.sh --with-ctng`。`FFBUILD_CC` / `CC`（以及 `CXX`/`LD`/`AR` 等）可覆盖，
 > 也可指向带版本号的编译器（如 `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`）。
 > 追加 Flag 用 `FFBUILD_EXTRA_CFLAGS`、`FFBUILD_EXTRA_LDFLAGS`。查看最终配置：
-> `source native/env.sh && ffbuild_env_dump`；完整变量表见 `native/env.sh` 顶部注释。
+> `source native/env.sh && ffbuild_env_dump`；完整变量表见 `native/env.sh` 顶部注释与
+> [docs/build.md](docs/build.md)。
 
 ### 设置代理
 
@@ -111,21 +99,19 @@ FFBUILD_PROXY=http://host:port ./native/download.sh   # 覆盖所有协议
 FFBUILD_PROXY= ./native/download.sh                   # 忽略 shell 中的代理
 ```
 
-> [!IMPORTANT]
-> - `FFBUILD_ROOT` 路径不能包含 `.`（上游 libxcb/libglvnd 的路径处理会出错）。
-> - 产物对齐宿主 glibc；~~需要 glibc 2.28 基线时使用 `FFBUILD_TOOLCHAIN_MODE=ctng`。~~
-> - 构建不需要 root，删除仓库即可清理全部构建产物。
-
 > `svn` 不读取这些变量（只认 `~/.subversion/servers`），因此 lame 与 xvid 两个阶段始终直连。
 
 ## 目录
 
 ```
-ffbuild/{prefix,work,log,state,pkgroot}   构建根（FFBUILD_ROOT）
-.buildtools/                              托管的构建工具，不入库
-.cache/downloads/                         依赖源码缓存
-artifacts/                                产物
+ffbuild/{prefix,destdir,work,log,state,pkgroot}   构建根（FFBUILD_ROOT）
+.buildtools/                                      托管的构建工具、venv、rust，不入库
+.cache/downloads/                                 依赖源码缓存
+artifacts/                                        产物
 ```
+
+> `FFBUILD_ROOT` 路径不能包含 `.`（上游 libxcb/libglvnd 的路径处理会出错）；产物对齐宿主
+> glibc，~~需要 glibc 2.28 基线时使用 `FFBUILD_TOOLCHAIN_MODE=ctng`~~。
 
 ## 许可
 

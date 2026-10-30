@@ -10,52 +10,42 @@ build FFmpeg and its dependencies directly on a Linux x86_64 host.
 
 Currently, only the `linux64` target is supported. Upstream's other targets are still present but untested.
 
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [Setting up the build host](docs/setup_EN.md) | prerequisites, per-distribution packages, every `setup.sh` option, reading `--check` |
+| [Building](docs/build_EN.md) | compiler and toolchain modes, build controls, directory layout, source cache |
+| [Troubleshooting](docs/troubleshooting_EN.md) | C++23, LLVMgold, OCaml num, permission errors, weak dependencies |
+
 ## How to make a build
 
 ### Prerequisites
 
-Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root). On apt hosts `setup.sh`
-installs the base toolchain (gcc/g++, clang, python3, git and the usual CLI tools) and builds the
-rest — autoconf, automake, cmake, nasm, yasm, gettext and the Python venv — under `.buildtools/`.
-On Fedora/EL, Arch and openSUSE it only prints the packages this host needs and never touches
-sudo; pass `--install` to let it install them. Package names live in `native/pkgdeps.conf`
-(one capability per line, columns for apt / dnf / dnf-el8 / pacman / zypper, `-` meaning the
-distribution has no such package). RHEL 8 hosts get `python3.12` and `openssl3-devel`, and the
-install command carries `--enablerepo=powertools`.
+An x86_64 Linux host with `bash`, `git` and python 3.10 or newer. `setup.sh` installs the
+distro packages (apt hosts directly; other hosts only print the command unless you pass
+`--install`) and builds the 24 managed tools, the Python venv and the Rust toolchain under
+`.buildtools/`.
 
-`./native/setup.sh --check` prints the required and optional tool list without changing anything.
-
-Other `setup.sh` options:
-
-```bash
-./native/setup.sh --print-packages[=all]  # print a ready-to-paste install command
-./native/setup.sh --install               # also install on non-apt hosts (default: print only)
-./native/setup.sh --no-install            # packages are managed externally; skip installation
-./native/setup.sh --buildtools-only       # only build the managed tools (no descriptors/build root)
-./native/setup.sh --with-tools=jq,rsync   # build these tools (by default only missing ones)
-./native/setup.sh --no-managed-tools      # build nothing; use whatever the host provides
-```
+> Building needs no root; deleting the repository removes every build artifact (the distro
+> packages installed by `setup.sh` stay in the system).
+> Per-distribution packages, every option and troubleshooting live in
+> [docs/setup_EN.md](docs/setup_EN.md).
 
 > [!IMPORTANT]
 > Requires compiler with C++23 support (like GCC 12 or higher).
 > > Dependency `openal-soft` demands for range constructor for std::string_view `std::string_view`
 > 
 > Requires LLVM 15 or higher.
-> > LLVMgold plugin version (for binutils) must be 15 or higher.   
+> > LLVMgold plugin version (for binutils) must be 15 or higher.  
 > > Otherwise `ar` cannot index Rust bitcode symbols (From dependency `librsvg`).
 
-### Preparation
+### Quick start
 
 ```bash
-./native/setup.sh          # install build prerequisites, print the resolved config
-./native/setup.sh --check
-./native/download.sh       # fetch dependency sources (content-addressed cache)
-```
-
-### Start building
-
-```bash
-./build.sh target variant [addin [addin] [addin] ...]
+./native/setup.sh --check   # read-only: what is missing and how to install it
+./native/setup.sh           # apt hosts install; other hosts print the command (add --install)
+./build.sh linux64 gpl      # fetches the sources, then builds
 ```
 
 On success, the resulting archive will be in `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler>-<date>.tar.xz`.
@@ -82,7 +72,7 @@ Available variants:
 * `nonfree-shared` Same again, but with the nonfree set of dependencies.
 
 All of those can be optionally combined with any combination of addins:
-* `4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1`/`8.0`/`8.1`/`9.0` to build from the respective release branch instead of master.
+* `4.3`/`4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1`/`8.0`/`8.1`/`9.0` to build from the respective release branch instead of master.
 * `debug` to not strip debug symbols from the binaries. This increases the output size by about 250MB.
 * `lto` build all dependencies and ffmpeg with -flto=auto (HIGHLY EXPERIMENTAL, broken for Windows, sometimes works for Linux)
 
@@ -98,10 +88,11 @@ FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng toolchain (
 > `host` (default) probes `cc`, then `gcc`, then `clang`, with `CXX` following the same family.
 > `clang` / `gcc` only set the host toolchain's defaults, and `ctng` uses a locally built
 > crosstool-ng toolchain — untested so far — and needs `./native/setup.sh --with-ctng` first.
-> `FFBUILD_CC` / `CC` (and `CXX`/`LD`/`AR`/...) override the choice. Extra flags:
+> `FFBUILD_CC` / `CC` (and `CXX`/`LD`/`AR`/...) override the choice, including versioned
+> compilers such as `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`. Extra flags:
 > `FFBUILD_EXTRA_CFLAGS`, `FFBUILD_EXTRA_LDFLAGS`. See the resolved configuration with
 > `source native/env.sh && ffbuild_env_dump`; the full variable list is documented at the
-> top of `native/env.sh`.
+> top of `native/env.sh` and in [docs/build_EN.md](docs/build_EN.md).
 
 ### Set proxy
 
@@ -112,22 +103,21 @@ FFBUILD_PROXY=http://host:port ./native/download.sh   # override all protocols
 FFBUILD_PROXY= ./native/download.sh                   # ignore the shell's proxy
 ```
 
-> [!IMPORTANT]
-> - `FFBUILD_ROOT` must not contain a dot (upstream's libxcb/libglvnd path handling breaks on it).
-> - Artifacts match the host glibc; ~~use `FFBUILD_TOOLCHAIN_MODE=ctng` for a glibc 2.28 baseline.~~
-> - Building needs no root; deleting the repository removes every build artifact.
-
 > `svn` ignores these variables (it only reads `~/.subversion/servers`), so the lame and xvid
 > stages always connect directly.
 
 ## Project layout
 
 ```
-ffbuild/{prefix,work,log,state,pkgroot}   build root (FFBUILD_ROOT)
-.buildtools/                              managed build tools, not tracked by git
-.cache/downloads/                         dependency source cache
-artifacts/                                build output
+ffbuild/{prefix,destdir,work,log,state,pkgroot}   build root (FFBUILD_ROOT)
+.buildtools/                                     managed build tools, venv, rust; not tracked by git
+.cache/downloads/                                dependency source cache
+artifacts/                                       build output
 ```
+
+> `FFBUILD_ROOT` must not contain a dot (upstream's libxcb/libglvnd path handling breaks on
+> it); artifacts match the host glibc, ~~use `FFBUILD_TOOLCHAIN_MODE=ctng` for a glibc 2.28
+> baseline~~.
 
 ## License
 
