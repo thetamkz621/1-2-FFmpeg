@@ -172,6 +172,14 @@ if [[ "$PKG_FLAVOR" == dnf-el8 ]] &&
    dnf -q repolist --all 2>/dev/null | awk '{print $1}' | grep -qx powertools; then
     DNF_REPO_ARGS=(--enablerepo=powertools)
 fi
+# Fedora 默认安装弱依赖（Recommends）。ant 的 JDK 绑定会 Recommends 完整 JDK，完整
+# JDK 又 Recommends gtk3，再经 gdk-pixbuf2 → glycin → libheif → libheif-ffmpeg 拉进
+# ffmpeg-free 全家（实测 789 包 / 642 MiB，关掉后 481 包 / 473 MiB）。构建宿主只认
+# 显式清单；apt 侧早就用 --no-install-recommends，这里对齐。
+DNF_INSTALL_ARGS=()
+if [[ "$PKG_MGR" == dnf ]]; then
+    DNF_INSTALL_ARGS=("${DNF_REPO_ARGS[@]}" --setopt=install_weak_deps=False)
+fi
 
 # pkg_cmd <capability> -> 一行可直接粘贴的安装命令
 pkg_cmd() {
@@ -329,11 +337,7 @@ pkg_cmd_for() {
     (($#)) || return 0
     case "${PKG_MGR:-none}" in
         apt-get) printf 'apt-get install -y --no-install-recommends %s\n' "$*" ;;
-        dnf)     if ((${#DNF_REPO_ARGS[@]})); then
-                     printf 'dnf install -y %s %s\n' "${DNF_REPO_ARGS[*]}" "$*"
-                 else
-                     printf 'dnf install -y %s\n' "$*"
-                 fi ;;
+        dnf)     printf 'dnf install -y %s %s\n' "${DNF_INSTALL_ARGS[*]}" "$*" ;;
         pacman)  printf 'pacman -S --needed %s\n' "$*" ;;
         zypper)  printf 'zypper install %s\n' "$*" ;;
         *)       printf '%s\n' "$*" ;;
@@ -509,10 +513,11 @@ do_check() {
         rt_missing "makeinfo (texinfo)     autotools 文档" "$(tool_hint texinfo)"
     fi
 
-    if command -v ant >/dev/null 2>&1 && command -v java >/dev/null 2>&1; then
-        rt_ok "ant + JDK              libbluray (BD-J)"
+    # BD-J 的 jar 由 meson 直接调 javac 生成，只有 JRE 的宿主不够。
+    if command -v ant >/dev/null 2>&1 && command -v javac >/dev/null 2>&1; then
+        rt_ok "ant + JDK (javac)      libbluray (BD-J)"
     else
-        rt_missing "ant + JDK              libbluray (BD-J)" "$(tool_hint ant)"
+        rt_missing "ant + JDK (javac)      libbluray (BD-J)" "$(tool_hint ant)"
     fi
 
     ap_ver="$(probe_version autopoint --version | awk '{print $NF}')"
@@ -715,7 +720,7 @@ if [[ "$INSTALL_OK" -eq 1 ]]; then
     if ((${#_keep[@]})); then
         case "$PKG_MGR" in
             apt-get) asroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${_keep[@]}" ;;
-            dnf)     asroot dnf install -y "${DNF_REPO_ARGS[@]}" "${_keep[@]}" ;;
+            dnf)     asroot dnf install -y "${DNF_INSTALL_ARGS[@]}" "${_keep[@]}" ;;
             pacman)  asroot pacman -S --needed --noconfirm "${_keep[@]}" ;;
             zypper)  asroot zypper --non-interactive install "${_keep[@]}" ;;
         esac || {
