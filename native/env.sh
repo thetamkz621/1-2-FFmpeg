@@ -40,7 +40,7 @@
 #       -> APPEND to the per-stage flags
 #
 # Layout / misc
-#   FFBUILD_ROOT           build root, default <repo>/.ffbuild
+#   FFBUILD_ROOT           build root, default <repo>/ffbuild
 #   FFBUILD_JOBS           parallel job count, default $(nproc)
 #   FFBUILD_PROXY          proxy override. Unset: inherit http_proxy /
 #                          https_proxy / all_proxy (and their uppercase forms)
