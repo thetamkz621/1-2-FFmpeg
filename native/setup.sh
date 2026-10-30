@@ -361,7 +361,7 @@ pkg_cmd_for() {
         apt-get) printf 'apt-get install -y --no-install-recommends %s\n' "$*" ;;
         dnf)     printf 'dnf install -y %s %s\n' "${DNF_INSTALL_ARGS[*]}" "$*" ;;
         pacman)  printf 'pacman -S --needed %s\n' "$*" ;;
-        zypper)  printf 'zypper install %s\n' "$*" ;;
+        zypper)  printf 'zypper install --no-recommends %s\n' "$*" ;;
         *)       printf '%s\n' "$*" ;;
     esac
 }
@@ -744,7 +744,7 @@ if [[ "$INSTALL_OK" -eq 1 ]]; then
             apt-get) asroot env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${_keep[@]}" ;;
             dnf)     asroot dnf install -y "${DNF_INSTALL_ARGS[@]}" "${_keep[@]}" ;;
             pacman)  asroot pacman -S --needed --noconfirm "${_keep[@]}" ;;
-            zypper)  asroot zypper --non-interactive install "${_keep[@]}" ;;
+            zypper)  asroot zypper --non-interactive install --no-recommends "${_keep[@]}" ;;
         esac || {
             echo "WARNING: package installation failed; run './native/setup.sh --check' to see what is missing" >&2
         }
