@@ -16,15 +16,21 @@
 
 Debian/Ubuntu 系 x86_64 主机、bash、git 与 sudo（或 root）。`setup.sh` 在 apt 宿主上代装基础工具链
 （gcc/g++、clang、python3、git 及常用命令行工具），其余——autoconf、automake、cmake、nasm、
-yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。其他发行版只打印安装命令，由使用者自行执行。
+yasm、gettext 与 Python venv——都在 `.buildtools/` 下自建。
+
+Fedora/EL、Arch、openSUSE 等宿主默认只打印本机需要安装的包，不动 sudo；加 `--install` 才代装。
+包名映射在 `native/pkgdeps.conf`（每行一个能力，按 apt / dnf / dnf-el8 / pacman / zypper 分列，
+`-` 表示该发行版没有这个包），改包名只需要改那一张表。RHEL 8 系用 `python3.12` 与
+`openssl3-devel`，setup 在安装时自动带上 `--enablerepo=powertools`。
 
 `./native/setup.sh --check` 只报告所需与可选工具，不改动系统。
 
 `setup.sh` 的其他选项：
 
 ```bash
-./native/setup.sh --print-apt[=all]       # 只打印将要安装的 apt 包
-./native/setup.sh --no-apt                # 包由外部管理，跳过安装
+./native/setup.sh --print-packages[=all]  # 打印本机可直接粘贴的安装命令
+./native/setup.sh --install               # 非 apt 宿主也代装（默认只打印命令）
+./native/setup.sh --no-install            # 包由外部管理，跳过安装
 ./native/setup.sh --buildtools-only       # 只建托管构建工具，不写描述文件与构建根
 ./native/setup.sh --with-tools=jq,rsync   # 指定要建的工具（默认只补缺失的）
 ./native/setup.sh --no-managed-tools      # 不建工具，使用宿主提供的版本

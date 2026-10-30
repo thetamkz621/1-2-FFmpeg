@@ -17,15 +17,20 @@ Currently, only the `linux64` target is supported. Upstream's other targets are 
 Debian/Ubuntu-style x86_64 host with `bash`, `git` and `sudo` (or root). On apt hosts `setup.sh`
 installs the base toolchain (gcc/g++, clang, python3, git and the usual CLI tools) and builds the
 rest — autoconf, automake, cmake, nasm, yasm, gettext and the Python venv — under `.buildtools/`.
-On other distributions it only prints the commands to run.
+On Fedora/EL, Arch and openSUSE it only prints the packages this host needs and never touches
+sudo; pass `--install` to let it install them. Package names live in `native/pkgdeps.conf`
+(one capability per line, columns for apt / dnf / dnf-el8 / pacman / zypper, `-` meaning the
+distribution has no such package). RHEL 8 hosts get `python3.12` and `openssl3-devel`, and the
+install command carries `--enablerepo=powertools`.
 
 `./native/setup.sh --check` prints the required and optional tool list without changing anything.
 
 Other `setup.sh` options:
 
 ```bash
-./native/setup.sh --print-apt[=all]       # only print the apt packages that would be installed
-./native/setup.sh --no-apt                # packages are managed externally; skip installation
+./native/setup.sh --print-packages[=all]  # print a ready-to-paste install command
+./native/setup.sh --install               # also install on non-apt hosts (default: print only)
+./native/setup.sh --no-install            # packages are managed externally; skip installation
 ./native/setup.sh --buildtools-only       # only build the managed tools (no descriptors/build root)
 ./native/setup.sh --with-tools=jq,rsync   # build these tools (by default only missing ones)
 ./native/setup.sh --no-managed-tools      # build nothing; use whatever the host provides
