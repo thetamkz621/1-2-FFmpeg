@@ -276,6 +276,21 @@ PKG_KEYS_EXTRA=(
     gtk_doc gobject_introspection itstool
 )
 
+# zypper 的 search --match-exact 只认包名：python3-pip、java-devel、ocamlbuild
+# 这类只以 provides 存在的名字会被误判成缺包，所以改用 --provides；104 才是
+# "确实没有"，其它错误（元数据没缓存、锁冲突）一律当"无法判断"，别把包丢掉。
+_ZYP_HAS_META=""
+zypper_metadata_ready() {
+    if [[ -z "$_ZYP_HAS_META" ]]; then
+        if zypper --quiet --no-refresh search -x --provides filesystem >/dev/null 2>&1; then
+            _ZYP_HAS_META=1
+        else
+            _ZYP_HAS_META=0
+        fi
+    fi
+    [[ "$_ZYP_HAS_META" == 1 ]]
+}
+
 # pkg_available <pkg> -> 0 可用 / 1 该发行版没有 / 2 无法判断（元数据未就绪）
 #
 # dnf 用 --whatprovides 而不是 list：Fedora 44 已经没有 zlib-devel 这个包，它由
@@ -298,7 +313,14 @@ pkg_available() {
         ;;
     zypper)
         if rpm -q "$pkg" >/dev/null 2>&1; then return 0; fi
-        zypper --quiet search --match-exact "$pkg" >/dev/null 2>&1
+        zypper_metadata_ready || return 2
+        local zrc=0
+        zypper --quiet --no-refresh search -x --provides "$pkg" >/dev/null 2>&1 || zrc=$?
+        case $zrc in
+            0)   return 0 ;;
+            104) return 1 ;;
+            *)   return 2 ;;
+        esac
         ;;
     *)
         return 2
