@@ -8,11 +8,11 @@
 # upstream stage scripts reference by absolute path.
 #
 # Usage:
-#   ./native/setup.sh                 # install core build prerequisites
-#   ./native/setup.sh --all           # also install the optional upstream packages
+#   ./native/setup.sh                 # provision the host (packages printed unless --install)
+#   ./native/setup.sh --all           # include the optional upstream packages in the list
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
-#   ./native/setup.sh --install       # also install packages on non-apt hosts
-#   ./native/setup.sh --no-install    # skip package installation (host manages its own)
+#   ./native/setup.sh --install       # install the packages (default: print the command)
+#   ./native/setup.sh --no-install    # skip the package step entirely (managed externally)
 #   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
 #   ./native/setup.sh --with-tools=a,b   # build these build tools even if only some are missing
 #   ./native/setup.sh --no-managed-tools # do not build tools; use whatever the host provides
@@ -692,8 +692,8 @@ int main(int argc, char **argv) {
 }
 
 # ------------------------------------------------------- package install -----
-# apt 宿主默认代装（历史行为）；其他发行版默认只打印命令，--install 才动手。猜错
-# 包名的代价（装错包、改坏仓库、无 tty 时抛 sudo 错误）比省下的几步大。
+# 所有宿主默认只打印安装命令，--install 才动手。猜错包名的代价（装错包、改坏仓库、
+# 无 tty 时抛 sudo 错误）比省下的几步大。
 INSTALL_OK=1
 if [[ "$DO_CHECK" -eq 1 ]]; then
     # --check 是只读诊断：任何情况下都不动系统。
@@ -701,10 +701,10 @@ if [[ "$DO_CHECK" -eq 1 ]]; then
 elif [[ "$NO_INSTALL" -eq 1 ]]; then
     INSTALL_OK=0
     echo "note: --no-install: skipping package installation (tools must already be present)"
-elif [[ "$PKG_MGR" != "apt-get" && "$DO_INSTALL" -ne 1 ]]; then
+elif [[ "$DO_INSTALL" -ne 1 ]]; then
     INSTALL_OK=0
-    echo "note: detected ${PKG_MGR:-unknown package manager} ($(pkg_flavor_name)); this script only installs packages on apt hosts by default."
-    echo "      packages this host needs (install them yourself, or add --install):"
+    echo "note: detected ${PKG_MGR:-unknown package manager} ($(pkg_flavor_name)); this script only prints the packages by default."
+    echo "      install them yourself, or rerun with --install:"
     mapfile -t _hint_pkgs < <(pkg_expand)
     if ((${#_hint_pkgs[@]})); then
         pkg_cmd_for "${_hint_pkgs[@]}" | sed 's/^/        /'
@@ -760,7 +760,7 @@ if [[ "$INSTALL_OK" -eq 1 ]]; then
 fi
 
 # ------------------------------------------------------------ env contract ---
-# 到了这里，apt 宿主上编译器已随包装好，env.sh 的 CC/CXX 校验才有意义。
+# 到了这里，包已经装过（--install 或用户自己装），env.sh 的 CC/CXX 校验才有意义。
 # --check 例外：它是给裸机做诊断的，缺编译器时只记录，由 do_check 报 [MISSING]。
 if [[ "$DO_CHECK" -eq 1 ]]; then
     export FFBUILD_ENV_CHECK_ONLY=1
