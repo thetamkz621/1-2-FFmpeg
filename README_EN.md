@@ -23,9 +23,9 @@ Currently, only the `linux64` target is supported. Upstream's other targets are 
 ### Prerequisites
 
 An x86_64 Linux host with `bash`, `git` and python 3.10 or newer. `setup.sh` installs the
-distro packages (apt hosts directly; other hosts only print the command unless you pass
-`--install`) and builds the 24 managed tools, the Python venv and the Rust toolchain under
-`.buildtools/`.
+distro packages (every host only prints the command unless you pass `--install`) and builds
+the 24 managed tools and the Python venv under `.buildtools/`, plus a Rust toolchain when the
+host has no usable one.
 
 > Building needs no root; deleting the repository removes every build artifact (the distro
 > packages installed by `setup.sh` stay in the system).
@@ -44,7 +44,7 @@ distro packages (apt hosts directly; other hosts only print the command unless y
 
 ```bash
 ./native/setup.sh --check   # read-only: what is missing and how to install it
-./native/setup.sh           # apt hosts install; other hosts print the command (add --install)
+./native/setup.sh           # print what this host needs; nothing is changed
 ./build.sh linux64 gpl      # fetches the sources, then builds
 ```
 

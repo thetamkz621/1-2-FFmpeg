@@ -14,15 +14,15 @@
 
 ## 支持的发行版
 
-| 包管理器 | 发行版 | 默认行为 |
+| 包管理器 | 发行版 | 备注 |
 |---|---|---|
-| apt | Debian 13、Ubuntu 22.04 / 24.04 / 26.04 | 直接代装 |
-| dnf | Fedora 44 | 只打印命令 |
-| dnf（EL8） | Rocky Linux 8.10 | 只打印命令，安装时自动带 `--enablerepo=powertools` |
-| pacman | Arch Linux | 只打印命令 |
-| zypper | openSUSE Leap 16 | 只打印命令 |
+| apt | Debian 13、Ubuntu 22.04 / 24.04 / 26.04 | — |
+| dnf | Fedora 44 | — |
+| dnf（EL8） | Rocky Linux 8.10 | 安装时自动带 `--enablerepo=powertools` |
+| pacman | Arch Linux | — |
+| zypper | openSUSE Leap 16 | — |
 
-非 apt 宿主默认只打印一条可直接粘贴的命令，不动 sudo——猜错包名的代价比省下的几步大。
+所有宿主默认只打印一条可直接粘贴的命令，不动 sudo——猜错包名的代价比省下的几步大。
 加 `--install` 才代装。
 
 最近一轮（包名表改动之后）复测的是 Ubuntu 24.04、Fedora 44、Rocky 8.10、Arch 与
@@ -32,9 +32,9 @@ Leap 16；Debian 13、Ubuntu 22.04 / 26.04 用的是同一套包名，验证在�
 
 ```bash
 ./native/setup.sh --check             # 只读诊断，不改动系统
-./native/setup.sh                     # apt 宿主直接装；其他宿主只打印命令
+./native/setup.sh                     # 打印本机需要的包（不改系统）
 ./native/setup.sh --print-packages    # 打印本机需要的包
-./native/setup.sh --install           # 让脚本代装（非 apt 宿主）
+./native/setup.sh --install           # 让脚本代装（默认只打印）
 ```
 
 装完或改完配置后用 `--check` 复核，退出码 0 表示运行时前置齐了。
@@ -45,8 +45,8 @@ Leap 16；Debian 13、Ubuntu 22.04 / 26.04 用的是同一套包名，验证在�
 |---|---|
 | `--check` | 只读诊断：列出必需与可选工具、缺失项的安装命令；有缺失时退出码为 1 |
 | `--all` | 安装清单加上上游镜像里有、默认变体用不到的包（p7zip、qemu-user、nodejs、gtk-doc……） |
-| `--install` | 非 apt 宿主也代装 |
-| `--no-install` | 完全跳过装包（包由外部管理） |
+| `--install` | 代装本机需要的包（默认只打印命令） |
+| `--no-install` | 完全跳过装包步骤（连命令也不打印） |
 | `--print-packages[=all]` | 打印一条可直接粘贴的安装命令；`=all` 含 `--all` 的额外包 |
 | `--buildtools-only` | 只建托管工具与 venv，不写工具链描述文件、不建构建根 |
 | `--with-tools=a,b` | 指定要重建的工具（默认只补缺失的） |

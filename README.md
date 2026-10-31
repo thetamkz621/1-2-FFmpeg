@@ -23,7 +23,7 @@
 ### 前置
 
 x86_64 Linux 主机，需要 `bash`、`git` 与 python 3.10 或以上。`setup.sh` 负责装发行版包
-（apt 宿主直接装，其余宿主默认只打印命令，加 `--install` 才代装），并在 `.buildtools/`
+（默认只打印本机需要的包，加 `--install` 才代装），并在 `.buildtools/`
 下自建 24 个构建工具、Python venv 与 rust 工具链。
 
 > 构建不需要 root；删掉仓库即可清掉全部构建产物（`setup.sh` 装的发行版包仍留在系统里）。
@@ -41,7 +41,7 @@ x86_64 Linux 主机，需要 `bash`、`git` 与 python 3.10 或以上。`setup.s
 
 ```bash
 ./native/setup.sh --check   # 只读诊断：缺什么、怎么装
-./native/setup.sh           # apt 宿主直接装；其他宿主只打印命令（加 --install 代装）
+./native/setup.sh           # 打印本机需要的包（不改系统）
 ./build.sh linux64 gpl      # 取源码并构建
 ```
 

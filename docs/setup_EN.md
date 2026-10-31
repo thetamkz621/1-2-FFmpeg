@@ -15,17 +15,17 @@ your home directory. sudo is only used for the distro packages.
 
 ## Supported distributions
 
-| Package manager | Distribution | Default behaviour |
+| Package manager | Distribution | Notes |
 |---|---|---|
-| apt | Debian 13, Ubuntu 22.04 / 24.04 / 26.04 | installs the packages |
-| dnf | Fedora 44 | prints the command only |
-| dnf (EL8) | Rocky Linux 8.10 | prints the command only, adds `--enablerepo=powertools` |
-| pacman | Arch Linux | prints the command only |
-| zypper | openSUSE Leap 16 | prints the command only |
+| apt | Debian 13, Ubuntu 22.04 / 24.04 / 26.04 | — |
+| dnf | Fedora 44 | — |
+| dnf (EL8) | Rocky Linux 8.10 | adds `--enablerepo=powertools` when installing |
+| pacman | Arch Linux | — |
+| zypper | openSUSE Leap 16 | — |
 
-On non-apt hosts the default is to print one ready-to-paste command and never touch sudo —
-guessing package names wrong is worse than the few steps it saves. Pass `--install` to let
-the script install them.
+Every host prints one ready-to-paste command and never touches sudo — guessing package
+names wrong is worse than the few steps it saves. Pass `--install` to let the script install
+them.
 
 The latest round (after the package table was reworked) re-tested Ubuntu 24.04, Fedora 44,
 Rocky 8.10, Arch and Leap 16. Debian 13 and Ubuntu 22.04 / 26.04 share the same apt column,
@@ -35,9 +35,9 @@ but their verification dates from an earlier round.
 
 ```bash
 ./native/setup.sh --check             # read-only diagnosis
-./native/setup.sh                     # apt hosts install; others only print
+./native/setup.sh                     # print what this host needs; nothing is changed
 ./native/setup.sh --print-packages    # print what this host needs
-./native/setup.sh --install           # let the script install (non-apt hosts)
+./native/setup.sh --install           # install them for you (default: print only)
 ```
 
 Run `--check` afterwards; exit code 0 means the runtime prerequisites are satisfied.
@@ -48,8 +48,8 @@ Run `--check` afterwards; exit code 0 means the runtime prerequisites are satisf
 |---|---|
 | `--check` | read-only diagnosis; lists required/optional tools and the commands for anything missing; exit 1 when something is missing |
 | `--all` | extend the install list with upstream-image packages the default variant does not use (p7zip, qemu-user, nodejs, gtk-doc, …) |
-| `--install` | also install packages on non-apt hosts |
-| `--no-install` | skip package installation entirely |
+| `--install` | install the packages for you (default: print the command) |
+| `--no-install` | skip the package step (nothing is printed or installed) |
 | `--print-packages[=all]` | print a ready-to-paste install command; `=all` includes the `--all` extras |
 | `--buildtools-only` | build the managed tools and venv only; no toolchain descriptors, no build root |
 | `--with-tools=a,b` | rebuild these tools (by default only missing ones) |
