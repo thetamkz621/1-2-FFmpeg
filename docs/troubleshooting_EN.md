@@ -4,65 +4,111 @@
 
 ## Start with `--check`
 
-`./native/setup.sh --check` is read-only: it installs nothing and needs no sudo. Every
-`[MISSING]` line is followed by the install command for your distribution — fix those first.
+`./native/setup.sh --check` is a read-only diagnosis: it installs no packages, requires no sudo, and does not modify the repository. Pay particular attention to the following:
 
-## `string_view` / C++23 build failures
+- `[MISSING]`: a required item is missing. For host tools and runtime prerequisites, the following line provides the install command for the current distribution; for managed build tools, the output prompts you to rerun `./native/setup.sh`.
+- `[absent]`: an optional tool is missing; the build does not depend on it.
+- Exit code 1 indicates a blocking condition: a required host tool, a runtime prerequisite, or a managed build tool is missing. Implib and optional tools do not affect the exit code.
 
-`openal-soft` uses C++23 range constructors. `--check` compiles a probe with the current
-`$CXX`:
+Address each reported item, rerun `--check`, and confirm that the exit code is 0 before starting a build.
 
-- EL8: the system gcc 8.5 is too old. Use `scl enable gcc-toolset-15 bash`, or
-  `FFBUILD_CC=/opt/rh/gcc-toolset-15/root/usr/bin/g FFBUILD_CXX=.../g++`.
-- Ubuntu 22.04: install `gcc-12` and run with `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`.
+## C++23 build failures
 
-## `ar` reports missing symbols / LLVMgold is too old
+**Symptoms**: building `openal-soft` fails with errors involving `std::string_view` range construction or `<ranges>`.
 
-`librsvg`'s Rust static library carries LLVM bitcode; binutils needs LLVMgold ≥ 15 to
-index it. Either upgrade llvm, or remove `/usr/lib/bfd-plugins/LLVMgold*.so` so bfd reads
-the native symbol tables. `--check` prints the version it found.
+**Cause**: `openal-soft` uses C++23 range construction. The distribution's default compiler may not support this feature. `--check` compiles a small probe with the current `$CXX`, so the problem is reported before the build starts.
 
-## The OCaml `num` package is missing
+**Resolution**:
 
-Debian and Arch ship `libnum-ocaml-dev` / `ocaml-num`; EL8 and Leap 16 do not, so setup
-provisions num through opam into `.buildtools/opam/root`. When `--check` says the
-distribution has no num package, rerun `./native/setup.sh` — there is no distro package
-to install.
+Install a compiler with C++23 support (GCC 12 or later). When clang is used, the libstdc++ headers it uses must also come from GCC 12 or later.
 
-## `Permission denied` / `C compiler cannot create executables`
+For example:
 
-Usually a previous `setup.sh` run as root: `.buildtools/` is owned by root and a normal
-user can no longer write to it, which surfaces as `C compiler cannot create executables`
-in m4's configure stage.
+- RHEL 8: the system default GCC 8 does not meet this requirement. Install a `gcc-toolset` available in the configured repositories (the version depends on the repositories), then enable it with `scl enable <toolset> bash`; alternatively, set `FFBUILD_CC` and `FFBUILD_CXX` to `/opt/rh/<toolset>/root/usr/bin/gcc` and `g++`. If a toolset is installed, `--check` reports its path and how to enable it.
+- Ubuntu 22.04: the system default GCC 11 does not meet this requirement. Install `gcc-12` and `g++-12`, then set `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`.
+
+After making the change, rerun `--check` and confirm that the `c++23 string_view` check passes.
+
+## `ar` fails to index symbols, or LLVMgold is too old
+
+**Symptoms**: `ar` reports missing symbols during archiving or linking; or `--check` reports an LLVMgold plugin older than version 15.
+
+**Cause**: the Rust static library from `librsvg` contains LLVM bitcode. binutils requires the LLVMgold plugin, version 15 or later, to index the symbols in that bitcode.
+
+**Resolution**:
+
+1. Upgrade LLVM so that the LLVMgold plugin is version 15 or later. This is the recommended approach.
+2. If no other component requires LTO bitcode indexing, the plugin may be removed temporarily so that bfd falls back to the native symbol tables in the archive. This affects other builds that rely on LLVM bitcode; record the paths first so that the files can be restored by reinstalling LLVM.
+3. Rerun `--check` and confirm that the `llvm bfd plugin` check reports the expected version.
+
+## Missing OCaml `num` package
+
+**Symptoms**: `--check` reports that OCaml `num` is missing; or `fftw3` fails during configuration because `num` is unavailable.
+
+**Cause**: in maintainer mode, `fftw3` generates codelets with OCaml's `genfft`, which requires the `num` package from findlib. Some distributions do not provide this package.
+
+**Resolution**:
+
+- If the configured repositories provide the package, install it directly: `libnum-ocaml-dev` on Debian/Ubuntu; `ocaml-num` on Arch and Fedora.
+- Where the package is unavailable (for example, on RHEL 8 and openSUSE Leap 16), no distribution package is required. Rerun `./native/setup.sh`; the script provisions `num` through opam into `.buildtools/opam/root`.
+- `--check` distinguishes a missing `num` package from a missing OCaml toolchain. The latter requires `ocaml`, `findlib` and `ocamlbuild` to be installed first.
+
+## Permission errors
+
+**Symptoms**: `Permission denied`; or a build tool's configure stage reports `C compiler cannot create executables` (for example, `m4`).
+
+**Cause**: `setup.sh` was previously run as root, leaving `.buildtools/` owned by root. A normal user then has no write permission, and configure cannot write files or produce executables.
+
+**Resolution**: run the following from the repository root:
 
 ```bash
 sudo chown -R "$USER" .
 ```
 
-Run setup as your own user from then on; the script calls sudo itself for packages only.
+If an individual tool still has a partially populated build directory, remove that directory (for example, `.buildtools/src/m4`) and retry. Run `setup.sh` under your normal user account from then on; the script calls sudo only when installing distribution packages.
 
-## The install pulls in a desktop/media stack
+## Extra desktop and multimedia packages
 
-dnf installs weak dependencies by default: `ant` pulls `java-devel → full JDK → gtk3 →
-libheif → libheif-ffmpeg`, dragging in the whole ffmpeg-free stack and roughly doubling the
-package count. The script already passes `--setopt=install_weak_deps=False`; keep it when
-you paste the `--print-packages` output by hand. The zypper equivalent is
-`--no-recommends`.
+**Symptoms**: dnf resolves a noticeably larger set of packages than expected, including `gtk3`, `libheif`, and components from `ffmpeg-free`; the download is correspondingly larger.
 
-## Slow downloads, timeouts, proxy not applied
+**Cause**: dnf installs weak dependencies (Recommends) by default. The `ant` build dependency brings in its JDK binding, which recommends a full JDK; the full JDK, in turn, recommends `gtk3`, which brings in desktop and multimedia libraries.
 
-- Managed tools and source downloads honour `http_proxy` / `https_proxy` /
-  `FFBUILD_PROXY`; check the shell actually exported them (`env | grep -i proxy`).
-- `svn` ignores these variables (lame and xvid), so configure `~/.subversion/servers`.
-- Timeouts and retry counts are tunable, see
-  [build_EN.md](build_EN.md#cache-and-retries).
+**Resolution**:
 
-## Broken venv
+- The commands generated by the script already include `--setopt=install_weak_deps=False`. Keep this option when executing the `--print-packages` output manually.
+- The zypper equivalent is `--no-recommends`; the script already includes it.
+- The apt equivalent is `--no-install-recommends`; the script already includes it.
 
-If `--check` reports an incomplete venv, remove `.buildtools/venv` and rerun
-`./native/setup.sh`; it recreates the venv with the host interpreter.
+## Slow downloads, timeouts, or proxy settings not taking effect
+
+**Symptoms**: source downloads stall or time out, or connections do not go through the configured proxy.
+
+**Cause**: the proxy variables are not exported to the process environment; a download tool ignores them (`svn`); or the timeout and retry settings do not suit the current network.
+
+**Resolution**:
+
+- Proxy variables: `http_proxy`, `https_proxy`, and `all_proxy` (including their uppercase forms) are inherited from the environment; `FFBUILD_PROXY` overrides all protocols, and an empty value disables the proxy. Confirm that the variables are exported:
+  ```bash
+  env | grep -i proxy
+  ```
+- `svn`: `lame` and `xvid` fetch their sources over svn. svn reads only its own configuration and ignores the variables above, so configure `~/.subversion/servers`:
+  ```ini
+  [global]
+  http-proxy-host = proxy.example.com
+  http-proxy-port = 8080
+  ```
+  Alternatively, pass `--config-option servers:global:http-proxy-host=...` and `--config-option servers:global:http-proxy-port=...` to the svn command.
+- Retry settings: `RETRY_MAX` (attempts, default 10), `RETRY_TIMEOUT` (initial timeout, default 120 s), `RETRY_TIMEOUT_INC` (backoff increment, default 60 s), and `RETRY_SLEEP_MAX` (maximum backoff, default 90 s). These variables apply only to fetches that pass through `retry-tool`, namely `download.sh` and `build.sh`; they do not currently affect the opam, Implib, or managed-tool downloads performed by `setup.sh`. See [build_EN.md](build_EN.md#cache-and-retries).
+
+## Incomplete Python venv
+
+**Symptoms**: `--check` reports an incomplete pip or meson installation in the build venv; or the build cannot find meson.
+
+**Cause**: venv creation was interrupted, dependency installation failed, or the interpreter was replaced.
+
+**Resolution**: remove `.buildtools/venv` and rerun `./native/setup.sh`. The script recreates the venv with a host interpreter that meets the version requirement and reinstalls build-time modules such as meson; this requires access to a package index. Verify the result with `--check`.
 
 ## See also
 
-- [Setting up the build host](setup_EN.md)
+- [Setting up the build environment](setup_EN.md)
 - [Building](build_EN.md)
