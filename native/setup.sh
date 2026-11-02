@@ -258,6 +258,9 @@ PKG_KEYS_CORE=(
     toolchain zlib_dev openssl_dev pkgconf
     # 网络与归档
     git curl wget ca_certificates archivers
+    # configure 脚本依赖：libvpx 用 which 找汇编器；gettext 的 iconv 探测需要
+    # EUC-JP 转换器（部分发行版把 gconv 模块拆包）
+    which iconv_modules
     # Python 运行时：构建期模块由 venv 提供，发行版只管解释器与建 venv 的部件
     python
     # --enable-cuda-llvm：configure 把 nvcc 默认成 clang
