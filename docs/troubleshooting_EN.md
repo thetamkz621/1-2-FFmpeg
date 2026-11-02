@@ -53,6 +53,22 @@ After making the change, rerun `--check` and confirm that the `c++23 string_view
 - Where the package is unavailable (for example, on RHEL 8 and openSUSE Leap 16), no distribution package is required. Rerun `./native/setup.sh`; the script provisions `num` through opam into `.buildtools/opam/root`.
 - `--check` distinguishes a missing `num` package from a missing OCaml toolchain. The latter requires `ocaml`, `findlib` and `ocamlbuild` to be installed first.
 
+## Build failures with an official release source archive
+
+**Symptoms**: When `FFMPEG_REPO` points to a directory unpacked from an official release source archive, compilation of FFmpeg fails in a file that calls a dependency API. For example:
+
+```
+libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
+  from incompatible pointer type
+```
+
+**Cause**: dependency stages are pinned to current upstream revisions, whereas an official release archive is frozen at its tag. Compatibility changes made after the tag exist only on the release branch. The `RELEASE` check compares the major and minor version with the version addin; it does not check dependency APIs.
+
+**Resolution**:
+
+1. Prefer a checkout of the release branch: point `FFMPEG_REPO` at its working tree, or leave `FFMPEG_REPO` unset and select the corresponding version addin.
+2. If the archive must be used, skip the incompatible stage, for example `FFBUILD_SKIP_STAGES=openapv`. A skipped stage is also removed from FFmpeg's configure flags, so the resulting build no longer provides that feature.
+
 ## Permission errors
 
 **Symptoms**: `Permission denied`; or a build tool's configure stage reports `C compiler cannot create executables` (for example, `m4`).
