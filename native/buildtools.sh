@@ -33,6 +33,8 @@ BT_LOG="${BT_LOG:-$REPO_ROOT/.buildtools/log}"
 BT_SRC="${BT_SRC:-$REPO_ROOT/.buildtools/src}"
 BT_CACHE="${BT_CACHE:-$REPO_ROOT/.cache/tools}"
 BT_JOBS="${BT_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+BT_FAILED="$BT_STATE/failed-tools"
+BT_CURRENT_NAME=""
 export BT_PREFIX BT_JOBS BT_CACHE
 
 DO_BUILD=1
@@ -42,7 +44,17 @@ KEEP_GOING=0
 WANT=()
 FORCE=()
 
-die() { echo "buildtools.sh: $*" >&2; exit 1; }
+record_failure() {
+    [[ -n "${BT_CURRENT_NAME:-}" ]] || return 0
+    mkdir -p "$BT_STATE"
+    printf '%s\n' "$BT_CURRENT_NAME" >> "$BT_FAILED"
+}
+
+die() {
+    record_failure
+    echo "buildtools.sh: $*" >&2
+    exit 1
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -129,6 +141,7 @@ check_binary() {  # $1 = name
 
 build_one() {
     local recipe="$1" name; name="$(tool_name "$recipe")"
+    BT_CURRENT_NAME="$name"
     load_meta "$recipe" "$name"
 
     local dep
@@ -176,6 +189,7 @@ build_one() {
     local _ver=""
     _ver="$("$BT_PREFIX/bin/$BT_BIN" --version 2>/dev/null | head -1)"
     echo "   ok: $BT_PREFIX/bin/$BT_BIN${_ver:+ ($_ver)}"
+    BT_CURRENT_NAME=""
 }
 
 main() {
@@ -204,6 +218,9 @@ main() {
         return $rc
     fi
 
+    mkdir -p "$BT_STATE"
+    : > "$BT_FAILED"
+
     local -a list=()
     local -a failed=()
     if (( ${#WANT[@]} )); then
@@ -213,6 +230,7 @@ main() {
     fi
 
     for name in "${list[@]}"; do
+        BT_CURRENT_NAME="$name"
         recipe="$(ls -1 "$RECIPE_DIR"/*-"$name".sh 2>/dev/null | head -1)"
         [[ -n "$recipe" ]] || die "no recipe for '$name'"
         load_meta "$recipe" "$name"
@@ -222,6 +240,7 @@ main() {
         fi
         if is_done "$name" "$(stamp)"; then
             echo "== $name $BT_VERSION (already built)"
+            BT_CURRENT_NAME=""
             continue
         fi
         if (( KEEP_GOING )); then

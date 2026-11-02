@@ -794,8 +794,18 @@ if (( NO_MANAGED_TOOLS )); then
 else
     _bt_args=()
     [[ -n "${WITH_TOOLS:-}" ]] && _bt_args=(--tool "$WITH_TOOLS")
-    "$FFBUILD_REPO_ROOT/native/buildtools.sh" "${_bt_args[@]}" ||
-        note_failure "build tools (native/buildtools.sh)"
+    if ! "$FFBUILD_REPO_ROOT/native/buildtools.sh" "${_bt_args[@]}"; then
+        _bt_failed="$FFBUILD_BUILDTOOLS_PREFIX/state/failed-tools"
+        if [[ -s "$_bt_failed" ]]; then
+            while IFS= read -r _bt_tool; do
+                [[ -n "$_bt_tool" ]] || continue
+                note_failure "build tools: $_bt_tool (log: $FFBUILD_BUILDTOOLS_PREFIX/log/$_bt_tool.log)"
+            done < "$_bt_failed"
+        else
+            note_failure "build tools (native/buildtools.sh)"
+        fi
+        unset _bt_failed _bt_tool
+    fi
     unset _bt_args
 fi
 
