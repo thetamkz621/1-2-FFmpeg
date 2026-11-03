@@ -112,6 +112,18 @@ process_stage() {
         trap 'rm -rf -- "${WORKDIR:-}"' EXIT
         cd "$WORKDIR"
 
+        # git runs `maintenance run --auto` after fetch/clone/submodule update
+        # by default, and gc.autoDetach lets that maintenance keep running
+        # after the command returns. It rewrites .git/**/objects/pack while the
+        # cache tarball is created, which makes GNU tar exit 1. The work dir is
+        # temporary, so automatic maintenance has nothing to gain here; keep
+        # the gc synchronous for older git versions that call `gc --auto`
+        # directly. The tar retry below remains as a guard.
+        local _gi="${GIT_CONFIG_COUNT:-0}"
+        export GIT_CONFIG_COUNT=$((_gi + 2))
+        export "GIT_CONFIG_KEY_${_gi}=maintenance.auto" "GIT_CONFIG_VALUE_${_gi}=false"
+        export "GIT_CONFIG_KEY_$((_gi + 1))=gc.autoDetach" "GIT_CONFIG_VALUE_$((_gi + 1))=false"
+
         echo "fetching: $NAME"
         eval "set -e; $STG"
 
