@@ -115,7 +115,30 @@ process_stage() {
         echo "fetching: $NAME"
         eval "set -e; $STG"
 
-        tar -I "xz -T0" -cpf "$TGT.tmp" .
+        # git can still be finishing a clone (or rewriting pack files from a
+        # detached gc) when the archive is created. GNU tar then exits 1 with
+        # "file changed as we read it" even though the work tree is complete.
+        # Retry those races; any other failure is fatal.
+        local attempt rc=0
+        for attempt in 1 2 3; do
+            rm -f "$TGT.tmp"
+            if tar -I "xz -T0" -cpf "$TGT.tmp" .; then
+                rc=0
+                break
+            else
+                rc=$?
+            fi
+            if [[ $rc -ne 1 || $attempt -eq 3 ]]; then
+                break
+            fi
+            echo "note: $NAME changed while archiving (tar exit 1); retrying" >&2
+            sleep 2
+        done
+        if [[ $rc -ne 0 ]]; then
+            rm -f "$TGT.tmp"
+            echo "download.sh: failed to archive $NAME (tar exit $rc)" >&2
+            exit "$rc"
+        fi
         mv "$TGT.tmp" "$TGT"
         rm -f "$DLDIR/${NAME}.tar.xz"
         ln -sf "${NAME}_${HASH}.tar.xz" "$DLDIR/${NAME}.tar.xz"
