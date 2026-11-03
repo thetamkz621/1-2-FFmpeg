@@ -51,6 +51,23 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 | `FFBUILD_SKIP_STAGES=a,b` | skip the listed stages, separated by commas or spaces (for example, `rav1e` and `librsvg` when Rust is unavailable) |
 | `FFBUILD_EXTRA_VERSION=<str>` | passed to FFmpeg as `--extra-version`, default `YYYYMMDD`; affects `ffmpeg -version` output, not the artifact name |
 
+## FFmpeg source
+
+`FFMPEG_REPO` selects the FFmpeg source tree; the default is `https://github.com/FFmpeg/FFmpeg.git`.
+
+| Value | Behavior |
+|---|---|
+| Remote git URL | Clone the branch selected by the version addin (`master` by default); `GIT_BRANCH_OVERRIDE` overrides it |
+| Local git repository | Clone it and check out its current `HEAD`; `GIT_BRANCH_OVERRIDE` selects a branch or commit instead |
+| Local plain directory | Copy it into the build root; it must contain `configure` |
+| Nonexistent path | Fail with an error |
+
+- The source is always copied or cloned to `$FFBUILD_ROOT/ffmpeg`; the original is never modified.
+- Uncommitted changes in a local git repository are not part of the build. To include them, copy the working tree to a plain directory and point `FFMPEG_REPO` at the copy.
+- When the source root contains `RELEASE`, its major and minor version must match the version addin (`8.1` for `RELEASE` `8.1.1`); otherwise the build stops.
+- `GIT_BRANCH_OVERRIDE` has no effect on a local plain directory.
+- A source tree with neither `RELEASE` nor `.git` makes `ffbuild/version.sh` record `N` as the artifact version.
+
 ## Network
 
 | Variable | Meaning |

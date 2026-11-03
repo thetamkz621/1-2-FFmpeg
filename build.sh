@@ -45,6 +45,8 @@ export LICENSE_FILE
 source native/env.sh
 # shellcheck source=util/deps.sh
 source util/deps.sh
+# shellcheck source=util/source-prep.sh
+source util/source-prep.sh
 
 # Upstream bind-mounts patches/<name> at /patches for a few stages (aom,
 # libaribb24).  Natively the driver repopulates this repo-local dir per stage and
@@ -135,7 +137,6 @@ if [[ -n "${FFBUILD_COMPILER:-}" ]]; then
 fi
 
 FFMPEG_REPO="${FFMPEG_REPO:-https://github.com/FFmpeg/FFmpeg.git}"
-FFMPEG_REPO="${FFMPEG_REPO_OVERRIDE:-$FFMPEG_REPO}"
 GIT_BRANCH="${GIT_BRANCH:-master}"
 GIT_BRANCH="${GIT_BRANCH_OVERRIDE:-$GIT_BRANCH}"
 
@@ -336,7 +337,7 @@ FFMPEG_DIR="$FFBUILD_ROOT/ffmpeg"
 FFMPEG_PREFIX="$FFBUILD_ROOT/ffmpeg-prefix"
 rm -rf "$FFMPEG_PREFIX"
 rm -rf "$FFMPEG_DIR"
-git clone --filter=blob:none --branch="$GIT_BRANCH" "$FFMPEG_REPO" "$FFMPEG_DIR"
+ffmpeg_source_prepare
 cd "$FFMPEG_DIR"
 
 echo "== configuring ffmpeg =="

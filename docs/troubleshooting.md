@@ -52,6 +52,22 @@
 - 仓库不提供该包时（例如 RHEL 8、openSUSE Leap 16），无需安装发行版软件包。重新运行 `./native/setup.sh`，脚本会通过 opam 将 `num` 安装到 `.buildtools/opam/root`。
 - `--check` 会区分“缺少 `num`”与“缺少 OCaml 工具链”。后者需先安装 `ocaml`、`findlib` 与 `ocamlbuild`。
 
+## 使用官方发行源码包构建失败
+
+**症状**：`FFMPEG_REPO` 指向官方发行源码包解出的目录时，FFmpeg 本体编译失败，错误指向某个依赖头文件的函数签名。例如：
+
+```
+libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
+  from incompatible pointer type
+```
+
+**原因**：依赖阶段固定在当前上游修订，官方发行源码包则冻结在标签点。标签之后为兼容新依赖所做的修改只存在于发布分支。`RELEASE` 校验只比较主次版本与版本附加项，不检查依赖的 API。
+
+**处理**：
+
+1. 优先使用发布分支的检出：将 `FFMPEG_REPO` 指向该分支的工作树，或不设置 `FFMPEG_REPO` 并使用对应的版本附加项。
+2. 必须使用该源码包时，跳过不兼容的阶段，例如 `FFBUILD_SKIP_STAGES=openapv`。被跳过的阶段同时从 FFmpeg 的 configure 参数中移除，产物不再包含对应功能。
+
 ## 权限错误
 
 **症状**：出现 `Permission denied`；或构建工具的 configure 阶段报 `C compiler cannot create executables`（例如 `m4`）。
