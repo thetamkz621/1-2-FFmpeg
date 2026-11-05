@@ -1270,6 +1270,15 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
             # component tarballs; keep both inside the repository instead.
             sed -i "s|^CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$FFBUILD_CTNG_ROOT\"|" .config
             sed -i "s|^CT_LOCAL_TARBALLS_DIR=.*|CT_LOCAL_TARBALLS_DIR=\"$FFBUILD_CTNG_ROOT/sources\"|" .config
+            # ct-ng aborts when CC/CXX/CFLAGS/LD_LIBRARY_PATH are set: they
+            # belong to the final build, not to the toolchain build. Upstream
+            # runs ct-ng in a base image without them; drop the same variables
+            # for this step only.
+            unset CC CXX LD AR AS RANLIB NM STRIP OBJDUMP CPP
+            unset CFLAGS CXXFLAGS LDFLAGS CPPFLAGS LIBS
+            unset LD_LIBRARY_PATH LIBRARY_PATH LPATH
+            unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH
+            unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH PKG_CONFIG
             ./ct-ng build
         )
         if [[ ! -x "$CTNG_CC" ]]; then

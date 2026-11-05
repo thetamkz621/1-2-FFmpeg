@@ -283,7 +283,10 @@ export FFBUILD_COMPILER
 
 # If the caller forced CC but not CXX, keep the two drivers in the same family
 # instead of pairing clang with the mode's default g++ (or vice versa).
-if [[ -z "${FFBUILD_CXX:-}" && -z "${_FFBUILD_ENV_SNAP_CXX:-}" ]]; then
+# ctng is exempt: its CXX already carries the cross prefix and is "gcc" only
+# by compiler family, so the host g++ must not replace it.
+if [[ "$FFBUILD_TOOLCHAIN_MODE" != ctng &&
+      -z "${FFBUILD_CXX:-}" && -z "${_FFBUILD_ENV_SNAP_CXX:-}" ]]; then
     case "$FFBUILD_COMPILER:$CXX" in
     clang:clang++) ;;
     gcc:g++) ;;
@@ -663,11 +666,11 @@ ffbuild_write_toolchain_files() {
         echo "cpu_family = 'x86_64'"
         echo "cpu = 'x86_64'"
         echo "endian = 'little'"
-        if [[ -n "$FFBUILD_CMAKE_SYSROOT" ]]; then
-            echo
-            echo "[properties]"
-            echo "sys_root = '$FFBUILD_CMAKE_SYSROOT'"
-        fi
+        # Do not set sys_root here: meson prefixes every pkg-config -I path
+        # with it, which turns an absolute prefix path such as
+        # $FFBUILD_PREFIX/include/freetype2 into <sysroot>$FFBUILD_PREFIX/... .
+        # The cross compiler already searches its own sysroot for system
+        # headers and libraries.
     } > "$dir/cross.meson"
 
     {
@@ -694,6 +697,14 @@ ffbuild_write_toolchain_files() {
         fi
     } > "$dir/toolchain.cmake"
 }
+
+# The descriptors embed CC/CXX and the sysroot, so they must be regenerated
+# whenever the environment is re-evaluated. Generating them only in setup.sh
+# leaves a host-mode toolchain.cmake behind when the build later runs with
+# ctng (or clang), and CMake then compiles with the wrong driver.
+if [[ "${FFBUILD_ENV_CHECK_ONLY:-0}" != 1 ]]; then
+    ffbuild_write_toolchain_files
+fi
 
 # --------------------------------------------------------------- QA dump ------
 # `source native/env.sh && ffbuild_env_dump` prints the resolved configuration.
