@@ -114,7 +114,7 @@ If an individual tool still has a partially populated build directory, remove th
   http-proxy-port = 8080
   ```
   Alternatively, pass `--config-option servers:global:http-proxy-host=...` and `--config-option servers:global:http-proxy-port=...` to the svn command.
-- Retry settings: `RETRY_MAX` (attempts, default 10), `RETRY_TIMEOUT` (initial timeout, default 120 s), `RETRY_TIMEOUT_INC` (backoff increment, default 60 s), and `RETRY_SLEEP_MAX` (maximum backoff, default 90 s). These variables apply only to fetches that pass through `retry-tool`, namely `download.sh` and `build.sh`; they do not currently affect the opam, Implib, or managed-tool downloads performed by `setup.sh`. See [build_EN.md](build_EN.md#cache-and-retries).
+- Retry settings: `RETRY_MAX` (attempts, default 10), `RETRY_TIMEOUT` (initial timeout, default 120 s), `RETRY_TIMEOUT_INC` (backoff increment, default 60 s), and `RETRY_SLEEP_MAX` (maximum backoff, default 90 s). These variables apply to every fetch that passes through `retry-tool`, including the opam, Implib, rustup, crosstool-ng and managed-tool downloads performed by `setup.sh`, as well as `download.sh` and `build.sh`. HTTP 4xx responses are retried too; set `RETRY_MAX=1` temporarily when debugging a mirror URL. See [build_EN.md](build_EN.md#cache-and-retries).
 
 ## Incomplete Python venv
 
