@@ -47,7 +47,8 @@ After installing packages or changing the configuration, run `./native/setup.sh 
 | `--buildtools-only` | process only the managed build tools, venv, and Implib (installing opam when needed) |
 | `--with-tools=a,b` | process only the listed managed build tools (already-built ones are skipped) |
 | `--no-managed-tools` | do not build the managed build tools; use the host-provided versions, but an existing `.buildtools/prefix/bin` still precedes them on `PATH` |
-| `--with-ctng` | additionally build the crosstool-ng toolchain (used with `FFBUILD_TOOLCHAIN_MODE=ctng`; **untested**) |
+| `--with-ctng` | additionally build the crosstool-ng toolchain (used with `FFBUILD_TOOLCHAIN_MODE=ctng`; **untested**); skipped when the existing toolchain matches the current configuration |
+| `--force-ctng` | rebuild the crosstool-ng toolchain |
 
 `-h` / `--help` prints the usage summary (same options as the table above, without the description column). The comment block at the top of the script is the authoritative source for this list.
 

@@ -115,7 +115,9 @@ export FFBUILD_DESTDIR="$FFBUILD_ROOT/destdir"
 export FFBUILD_DESTPREFIX="$FFBUILD_DESTDIR$FFBUILD_PREFIX"
 export FFBUILD_WORK="$FFBUILD_ROOT/work"
 export FFBUILD_LOG="$FFBUILD_ROOT/log"
-export FFBUILD_CTNG_ROOT="${FFBUILD_CTNG_ROOT:-$FFBUILD_ROOT/ctng}"
+# crosstool-ng is expensive to build; keep it outside FFBUILD_ROOT so that
+# FFBUILD_CLEAN=1 does not throw the toolchain away with the build tree.
+export FFBUILD_CTNG_ROOT="${FFBUILD_CTNG_ROOT:-$FFBUILD_REPO_ROOT/.buildtools/ctng}"
 
 # --------------------------------------------------------------- helpers -----
 # pick <FFBUILD_VAR> <snapshot> <default>

@@ -21,7 +21,7 @@
 | `FFBUILD_TOOLCHAIN_MODE` | `host`（默认，按 `cc` → `gcc` → `clang` 探测）/ `clang` / `gcc` / `ctng` |
 | `FFBUILD_CC` `FFBUILD_CXX` `FFBUILD_LD` `FFBUILD_AR` … | 逐个覆盖编译器与工具（也可使用 `CC=` / `CXX=` 等） |
 | `FFBUILD_TOOLCHAIN_TRIPLE` | 覆盖传递给 stage 的 `--host` 三元组 |
-| `FFBUILD_CTNG_ROOT` | crosstool-ng 工具链位置，默认 `$FFBUILD_ROOT/ctng` |
+| `FFBUILD_CTNG_ROOT` | crosstool-ng 工具链位置，默认 `.buildtools/ctng`（不受 `FFBUILD_CLEAN` 影响） |
 
 `clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先运行 `./native/setup.sh --with-ctng`。（**目前未验证**）
 
@@ -91,7 +91,7 @@ source native/env.sh && ffbuild_env_dump
 | `ffbuild/state` | 断点续建状态 |
 | `ffbuild/destdir` | 各 stage 的 `DESTDIR`，stage 结束后合并到 `prefix` |
 | `ffbuild/pkgroot` | 打包暂存目录 |
-| `ffbuild/ctng` | crosstool-ng 工具链（`ctng` 模式） |
+| `.buildtools/ctng` | crosstool-ng 工具链（`ctng` 模式） |
 | `.buildtools/` | 托管构建工具、venv、Rust、opam |
 | `.cache/downloads/` | 源码缓存 |
 | `artifacts/` | 构建产物 |

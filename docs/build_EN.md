@@ -21,7 +21,7 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 | `FFBUILD_TOOLCHAIN_MODE` | `host` (default; probes `cc` → `gcc` → `clang`) / `clang` / `gcc` / `ctng` |
 | `FFBUILD_CC` `FFBUILD_CXX` `FFBUILD_LD` `FFBUILD_AR` … | per-tool overrides (or use `CC=` / `CXX=`, among others) |
 | `FFBUILD_TOOLCHAIN_TRIPLE` | override the `--host` triple passed to each stage |
-| `FFBUILD_CTNG_ROOT` | crosstool-ng toolchain location, default `$FFBUILD_ROOT/ctng` |
+| `FFBUILD_CTNG_ROOT` | crosstool-ng toolchain location, default `.buildtools/ctng` (unaffected by `FFBUILD_CLEAN`) |
 
 `clang` / `gcc` only set the defaults for the host toolchain. `ctng` requires running `./native/setup.sh --with-ctng` first. (**Currently untested.**)
 
@@ -91,7 +91,7 @@ source native/env.sh && ffbuild_env_dump
 | `ffbuild/state` | resume state |
 | `ffbuild/destdir` | per-stage `DESTDIR`, merged into `prefix` when the stage finishes |
 | `ffbuild/pkgroot` | packaging scratch directory |
-| `ffbuild/ctng` | crosstool-ng toolchain (`ctng` mode) |
+| `.buildtools/ctng` | crosstool-ng toolchain (`ctng` mode) |
 | `.buildtools/` | managed build tools, venv, Rust, opam |
 | `.cache/downloads/` | source cache |
 | `artifacts/` | build artifacts |
