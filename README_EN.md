@@ -77,11 +77,11 @@ All of those can be optionally combined with any combination of addins:
 ```bash
 FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
 FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
-FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng toolchain (untested)
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng toolchain
 ```
 
 > [!NOTE]
-> `host` (the default) probes `cc`, then `gcc`, then `clang`; `CXX` follows the same compiler family. `clang` / `gcc` only change the default binary names for the host toolchain. `ctng` uses a locally built crosstool-ng toolchain (**currently untested**) and requires running `./native/setup.sh --with-ctng` first.  
+> `host` (the default) probes `cc`, then `gcc`, then `clang`; `CXX` follows the same compiler family. `clang` / `gcc` only change the default binary names for the host toolchain. `ctng` uses a locally built crosstool-ng toolchain and requires running `./native/setup.sh --with-ctng` first; the toolchain lives in `.buildtools/ctng`, and the initial build compiles glibc and GCC.  
 > `FFBUILD_CC` / `CC` (and `CXX`, `LD`, `AR`, …) override this selection, including versioned compilers such as `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`.  
 > Additional compiler flags can be supplied through `FFBUILD_EXTRA_CFLAGS` and `FFBUILD_EXTRA_LDFLAGS`.  
 > To inspect the resolved configuration, run `source native/env.sh && ffbuild_env_dump`.  
@@ -108,7 +108,7 @@ artifacts/                                        build artifacts
 ```
 
 > `FFBUILD_ROOT` must not contain a period (this breaks path handling in `libxcb`/`libglvnd`).  
-> Artifacts match the host glibc; ~~use `FFBUILD_TOOLCHAIN_MODE=ctng` for a glibc 2.28 baseline~~.
+> Artifacts match the host glibc; for a glibc 2.28 baseline, use `FFBUILD_TOOLCHAIN_MODE=ctng` (run `./native/setup.sh --with-ctng` first).
 
 ## License
 

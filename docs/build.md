@@ -23,7 +23,7 @@
 | `FFBUILD_TOOLCHAIN_TRIPLE` | 覆盖传递给 stage 的 `--host` 三元组 |
 | `FFBUILD_CTNG_ROOT` | crosstool-ng 工具链位置，默认 `.buildtools/ctng`（不受 `FFBUILD_CLEAN` 影响） |
 
-`clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先运行 `./native/setup.sh --with-ctng`。（**目前未验证**）
+`clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先运行 `./native/setup.sh --with-ctng`。工具链安装在 `.buildtools/ctng`，首次构建包含 glibc 与 GCC，耗时较长。
 
 ## 编译参数
 

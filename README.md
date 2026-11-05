@@ -77,11 +77,11 @@
 ```bash
 FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
 FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
-FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng 工具链（未验证）
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng 工具链
 ```
 
 > [!NOTE]
-> `host`（默认）按 `cc` → `gcc` → `clang` 顺序探测，`CXX` 跟随同一编译器家族；`clang` / `gcc` 仅设置宿主工具链的默认二进制名称；`ctng` 使用本地构建的 crosstool-ng 工具链（**目前未验证**），需先运行 `./native/setup.sh --with-ctng`。  
+> `host`（默认）按 `cc` → `gcc` → `clang` 顺序探测，`CXX` 跟随同一编译器家族；`clang` / `gcc` 仅设置宿主工具链的默认二进制名称；`ctng` 使用本地构建的 crosstool-ng 工具链，需先运行 `./native/setup.sh --with-ctng`；工具链位于 `.buildtools/ctng`，首次构建包含 glibc 与 GCC，耗时较长。  
 > `FFBUILD_CC` / `CC`（以及 `CXX`、`LD`、`AR` 等）可覆盖上述选择，也可指向带版本号的编译器（如 `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`）。  
 > 追加编译选项使用 `FFBUILD_EXTRA_CFLAGS`、`FFBUILD_EXTRA_LDFLAGS`。  
 > 查看最终配置：`source native/env.sh && ffbuild_env_dump`。  
@@ -108,7 +108,7 @@ artifacts/                                        产物
 ```
 
 > `FFBUILD_ROOT` 路径不能包含 `.`（上游 `libxcb`/`libglvnd` 的路径处理会失败）。  
-> 产物与宿主 glibc 匹配，~~如需 glibc 2.28 基线，使用 `FFBUILD_TOOLCHAIN_MODE=ctng`~~。
+> 产物与宿主 glibc 匹配；如需 glibc 2.28 基线，使用 `FFBUILD_TOOLCHAIN_MODE=ctng`（先运行 `./native/setup.sh --with-ctng`）。
 
 ## 许可
 
