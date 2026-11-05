@@ -44,7 +44,7 @@ An x86_64 Linux host is required. `setup.sh` handles distribution packages (by d
 ./build.sh linux64 gpl      # fetch the sources and build
 ```
 
-On success, the artifact is written to `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler>-<date>.tar.xz`.
+On success, the artifact is written to `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler-or-toolchain>-<date>.tar.xz`.
 
 ### Targets, Variants and Addins
 

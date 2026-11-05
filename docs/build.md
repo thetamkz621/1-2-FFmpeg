@@ -99,8 +99,10 @@ source native/env.sh && ffbuild_env_dump
 产物名称：
 
 ```
-artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器>-<日期>.tar.xz
+artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器或工具链>-<日期>.tar.xz
 ```
+
+该字段在宿主 `gcc` / `clang` 模式下为 `gcc` / `clang`，在 `ctng` 模式下为 `ctng`。
 
 ## 缓存与重试
 

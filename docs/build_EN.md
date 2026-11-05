@@ -99,8 +99,10 @@ source native/env.sh && ffbuild_env_dump
 Artifact name:
 
 ```
-artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler>-<date>.tar.xz
+artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler-or-toolchain>-<date>.tar.xz
 ```
+
+This field is `gcc` or `clang` for host builds, and `ctng` in ctng mode.
 
 ## Cache and retries
 

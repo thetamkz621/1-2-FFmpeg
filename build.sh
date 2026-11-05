@@ -122,16 +122,17 @@ trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
 # A build root carries .done markers and static libraries built by one compiler;
 # reusing it with the other silently mixes object files. Record the compiler on
 # first use and refuse to continue on a mismatch (FFBUILD_CLEAN=1 wipes the root).
+_build_label="${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}}"
 if [[ -n "${FFBUILD_COMPILER:-}" ]]; then
     if [[ -f "$FFBUILD_ROOT/.compiler" ]]; then
         _prev_compiler="$(cat "$FFBUILD_ROOT/.compiler" 2>/dev/null || true)"
-        if [[ -n "$_prev_compiler" && "$_prev_compiler" != "$FFBUILD_COMPILER" ]]; then
-            echo "build.sh: $FFBUILD_ROOT was built with $_prev_compiler, now using $FFBUILD_COMPILER" >&2
+        if [[ -n "$_prev_compiler" && "$_prev_compiler" != "$_build_label" ]]; then
+            echo "build.sh: $FFBUILD_ROOT was built with $_prev_compiler, now using $_build_label" >&2
             echo "          use FFBUILD_ROOT=... for a separate tree, or FFBUILD_CLEAN=1 to start over" >&2
             exit 2
         fi
     else
-        printf '%s\n' "$FFBUILD_COMPILER" > "$FFBUILD_ROOT/.compiler"
+        printf '%s\n' "$_build_label" > "$FFBUILD_ROOT/.compiler"
     fi
     unset _prev_compiler
 fi
@@ -277,7 +278,7 @@ build_deps() {
     done
 }
 
-echo "== toolchain: ${FFBUILD_COMPILER:-unknown} (CC=${CC:-?} CXX=${CXX:-?}, mode=${FFBUILD_TOOLCHAIN_MODE:-?}) =="
+echo "== toolchain: ${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}} (CC=${CC:-?} CXX=${CXX:-?}, mode=${FFBUILD_TOOLCHAIN_MODE:-?}) =="
 
 if [[ -z "${FFBUILD_FFMPEG_ONLY:-}" ]]; then
     build_deps
@@ -359,7 +360,7 @@ cd "$FFBUILD_REPO_ROOT"
 ARTIFACTS_PATH="$FFBUILD_REPO_ROOT/artifacts"
 mkdir -p "$ARTIFACTS_PATH"
 
-BUILD_NAME="ffmpeg-$("$FFMPEG_DIR/ffbuild/version.sh" "$FFMPEG_DIR")-${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}-${FFBUILD_COMPILER:-unknown}-${FFBUILD_BUILD_DATE:-unknown}"
+BUILD_NAME="ffmpeg-$("$FFMPEG_DIR/ffbuild/version.sh" "$FFMPEG_DIR")-${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}-${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}}-${FFBUILD_BUILD_DATE:-unknown}"
 PKGROOT="$FFBUILD_ROOT/pkgroot/$BUILD_NAME"
 rm -rf "$FFBUILD_ROOT/pkgroot"
 mkdir -p "$PKGROOT"

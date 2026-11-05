@@ -281,6 +281,16 @@ unset _t _v _ffbuild_missing_drivers
 FFBUILD_COMPILER="$(_ffbuild_cc_kind "$CC")"
 export FFBUILD_COMPILER
 
+# Label used in artifact names and in the build-root stamp.  ctng is a
+# toolchain rather than a compiler family, so it must not collapse into "gcc"
+# (host gcc and ctng share the same compiler kind but cannot share a build root).
+if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
+    FFBUILD_COMPILER_LABEL=ctng
+else
+    FFBUILD_COMPILER_LABEL="$FFBUILD_COMPILER"
+fi
+export FFBUILD_COMPILER_LABEL
+
 # If the caller forced CC but not CXX, keep the two drivers in the same family
 # instead of pairing clang with the mode's default g++ (or vice versa).
 # ctng is exempt: its CXX already carries the cross prefix and is "gcc" only
