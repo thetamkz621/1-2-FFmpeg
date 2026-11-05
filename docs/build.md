@@ -23,7 +23,7 @@
 | `FFBUILD_TOOLCHAIN_TRIPLE` | 覆盖传递给 stage 的 `--host` 三元组 |
 | `FFBUILD_CTNG_ROOT` | crosstool-ng 工具链位置，默认 `.buildtools/ctng`（不受 `FFBUILD_CLEAN` 影响） |
 
-`clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先运行 `./native/setup.sh --with-ctng`。工具链安装在 `.buildtools/ctng`，首次构建包含 glibc 与 GCC，耗时较长。
+`clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先运行 `./native/setup.sh --with-ctng`。工具链安装在 `.buildtools/ctng`，首次构建包含 glibc 与 GCC，耗时较长。裁剪在依赖构建前执行，CMake 因此探测不到 OpenMP，`soxr` 与 `vidstab` 按串行编译；宿主 `gcc` / `clang` 模式不受影响。
 
 ## 编译参数
 

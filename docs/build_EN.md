@@ -23,7 +23,7 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 | `FFBUILD_TOOLCHAIN_TRIPLE` | override the `--host` triple passed to each stage |
 | `FFBUILD_CTNG_ROOT` | crosstool-ng toolchain location, default `.buildtools/ctng` (unaffected by `FFBUILD_CLEAN`) |
 
-`clang` / `gcc` only set the defaults for the host toolchain. `ctng` requires running `./native/setup.sh --with-ctng` first. The toolchain lives in `.buildtools/ctng`; the initial build compiles glibc and GCC and takes a while.
+`clang` / `gcc` only set the defaults for the host toolchain. `ctng` requires running `./native/setup.sh --with-ctng` first. The toolchain lives in `.buildtools/ctng`; the initial build compiles glibc and GCC and takes a while. Pruning runs before dependencies are built, so CMake cannot find OpenMP and `soxr`/`vidstab` are compiled serially; host `gcc` and `clang` builds are unaffected.
 
 ## Compiler flags
 
