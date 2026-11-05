@@ -122,4 +122,6 @@ artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器>-<日期>.t
 | `RETRY_TIMEOUT_INC` | 退避增量（秒），默认 `60` |
 | `RETRY_SLEEP_MAX` | 最大退避时间（秒），默认 `90` |
 
-这些参数仅影响经 `retry-tool` 的下载，即 `download.sh` 与 `build.sh`；`setup.sh` 自身的下载当前不受其控制。
+这些参数对所有取源生效：`setup.sh`（opam、Implib.so、rustup、crosstool-ng 与托管构建工具源码）、`download.sh`、`build.sh` 以及 `buildtools.sh` 都经 `retry-tool` 下载。
+
+未显式设置时，`download.sh` 使用 600 秒超时与 8 次尝试，`setup.sh` 与 `buildtools.sh` 使用 600 秒超时。HTTP 4xx 同样按重试次数退避；调试镜像地址时可临时设 `RETRY_MAX=1`。

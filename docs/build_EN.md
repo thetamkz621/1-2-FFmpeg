@@ -122,4 +122,6 @@ On a slow network, adjust the following parameters (used by `util/bin/retry-tool
 | `RETRY_TIMEOUT_INC` | backoff increment in seconds, default `60` |
 | `RETRY_SLEEP_MAX` | maximum backoff in seconds, default `90` |
 
-These parameters affect only downloads that pass through `retry-tool`, namely `download.sh` and `build.sh`; downloads performed by `setup.sh` are not currently controlled by them.
+These settings apply to every fetch: `setup.sh` (opam, Implib.so, rustup, crosstool-ng and managed build-tool sources), `download.sh`, `build.sh` and `buildtools.sh` all download through `retry-tool`.
+
+Unless overridden, `download.sh` uses a 600-second timeout and 8 attempts, while `setup.sh` and `buildtools.sh` use a 600-second timeout. HTTP 4xx responses are retried like any other failure; set `RETRY_MAX=1` temporarily when debugging a mirror URL.

@@ -113,7 +113,7 @@ sudo chown -R "$USER" .
   http-proxy-port = 8080
   ```
   也可在 svn 命令中传入 `--config-option servers:global:http-proxy-host=...` 与 `--config-option servers:global:http-proxy-port=...`。
-- 重试参数：`RETRY_MAX`（默认 10 次）、`RETRY_TIMEOUT`（初始超时，默认 120 秒）、`RETRY_TIMEOUT_INC`（退避增量，默认 60 秒）、`RETRY_SLEEP_MAX`（最大退避，默认 90 秒）。这些变量仅影响经 `retry-tool` 的取源，即 `download.sh` 与 `build.sh`；`setup.sh` 自身下载的 opam、Implib 与托管工具当前不受这些变量控制。详见 [build.md](build.md#缓存与重试)。
+- 重试参数：`RETRY_MAX`（默认 10 次）、`RETRY_TIMEOUT`（初始超时，默认 120 秒）、`RETRY_TIMEOUT_INC`（退避增量，默认 60 秒）、`RETRY_SLEEP_MAX`（最大退避，默认 90 秒）。这些变量对所有经 `retry-tool` 的取源生效，包括 `setup.sh` 的 opam、Implib、rustup、crosstool-ng 与托管工具源码，以及 `download.sh` 与 `build.sh`。HTTP 4xx 也会重试；调试镜像地址时可临时设 `RETRY_MAX=1`。详见 [build.md](build.md#缓存与重试)。
 
 ## Python venv 不完整
 

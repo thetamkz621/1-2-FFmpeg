@@ -784,6 +784,32 @@ if [[ "$DO_CHECK" -eq 1 ]]; then
     exit $?
 fi
 
+# Every fetch below goes through retry-tool. The per-attempt timeout is raised
+# to match download.sh: rustup and crosstool-ng fetch large trees over links
+# where the 120 s default is too short.
+RETRY_TOOL="$FFBUILD_REPO_ROOT/util/bin/retry-tool"
+RETRY_TIMEOUT="${RETRY_TIMEOUT:-600}"
+export RETRY_TIMEOUT
+if [[ ! -x "$RETRY_TOOL" ]]; then
+    echo "setup.sh: retry-tool not found at $RETRY_TOOL" >&2
+    exit 1
+fi
+
+# Clean the destination before every attempt: an interrupted clone leaves a
+# partial repository that the next attempt cannot reuse.
+clone_retry() {  # <dest> <url> [git clone options...]
+    local dest="$1" url="$2"; shift 2
+    if [[ -z "$dest" || -z "$url" ]]; then
+        echo "clone_retry: empty destination or URL" >&2
+        return 1
+    fi
+    "$RETRY_TOOL" bash -c '
+        dest=$1; url=$2; shift 2
+        rm -rf "$dest"
+        exec git clone "$@" "$url" "$dest"
+    ' _ "$dest" "$url" "$@"
+}
+
 # ------------------------------------------------------------ build tools -----
 # 构建工具全部源码自建：配方在 native/buildtools.d/，驱动在 native/buildtools.sh。
 # 装进 $FFBUILD_BUILDTOOLS_PREFIX/prefix，只放 bin/ 与 share/，不进 PKG_CONFIG_LIBDIR，
@@ -820,8 +846,12 @@ _ffbuild_path_prepend "$FFBUILD_BUILDTOOLS_BIN"
 # opam 是预编译二进制（不是源码包），所以留在 setup 里下载。
 bt_fetch() {  # <url> <dest> <sha256>
     local url="$1" dest="$2" want="$3" got=""
-    if ! curl -fsSL --max-time 300 -o "$dest" "$url" 2>/dev/null &&
-       ! wget -q -O "$dest" "$url" 2>/dev/null; then
+    if ! "$RETRY_TOOL" bash -c '
+        dest=$1; url=$2
+        curl -fsSL --max-time 300 -o "$dest" "$url" 2>/dev/null ||
+            wget -q -O "$dest" "$url" 2>/dev/null
+    ' _ "$dest" "$url"; then
+        rm -f "$dest"
         echo "  WARNING: could not download $url" >&2
         return 1
     fi
@@ -1022,7 +1052,7 @@ else
     echo "== installing Implib.so =="
     mkdir -p "$(dirname "$IMPLIB_DIR")"
     implib_tmp="$(mktemp -d)"
-    if git clone --filter=blob:none --depth=1 https://github.com/yugr/Implib.so "$implib_tmp/Implib.so"; then
+    if clone_retry "$implib_tmp/Implib.so" https://github.com/yugr/Implib.so --filter=blob:none --depth=1; then
         rm -rf "$IMPLIB_DIR"
         if mv "$implib_tmp/Implib.so" "$IMPLIB_DIR"; then
             echo "  Implib.so           (installed at $IMPLIB_DIR)"
@@ -1162,10 +1192,15 @@ prepare_rust() {
             RUSTUP_HOME="$FFBUILD_RUSTUP_HOME" "$rustup_bin" default ffbuild-host >/dev/null 2>&1 || true
         elif [[ -z "$rustup_bin" ]]; then
             echo "== installing rustup into $FFBUILD_RUSTUP_HOME =="
-            if ! curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal; then
+            rustup_init="$(mktemp)"
+            if ! "$RETRY_TOOL" curl -fsSL -o "$rustup_init" https://sh.rustup.rs; then
+                echo "  WARNING: could not download rustup-init" >&2
+                note_failure "rust (rustup install)"
+            elif ! "$RETRY_TOOL" sh "$rustup_init" -y --no-modify-path --profile minimal; then
                 echo "  WARNING: rustup install failed" >&2
                 note_failure "rust (rustup install)"
             fi
+            rm -f "$rustup_init"
             export PATH="$CARGO_HOME/bin:$PATH"
         else
             echo "== installing a rust toolchain into $FFBUILD_RUSTUP_HOME =="
@@ -1193,7 +1228,7 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
     CTNG_SRC="$FFBUILD_ROOT/ctng-src"
     mkdir -p "$FFBUILD_ROOT"
     if [[ ! -d "$CTNG_SRC/.git" ]]; then
-        git clone --filter=blob:none https://github.com/crosstool-ng/crosstool-ng.git "$CTNG_SRC"
+        clone_retry "$CTNG_SRC" https://github.com/crosstool-ng/crosstool-ng.git --filter=blob:none
     fi
     (
         cd "$CTNG_SRC"

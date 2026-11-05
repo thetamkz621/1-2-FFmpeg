@@ -32,6 +32,9 @@ BT_STATE="${BT_STATE:-$REPO_ROOT/.buildtools/state}"
 BT_LOG="${BT_LOG:-$REPO_ROOT/.buildtools/log}"
 BT_SRC="${BT_SRC:-$REPO_ROOT/.buildtools/src}"
 BT_CACHE="${BT_CACHE:-$REPO_ROOT/.cache/tools}"
+RETRY_TOOL="$REPO_ROOT/util/bin/retry-tool"
+RETRY_TIMEOUT="${RETRY_TIMEOUT:-600}"
+export RETRY_TIMEOUT
 BT_JOBS="${BT_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 BT_FAILED="$BT_STATE/failed-tools"
 BT_CURRENT_NAME=""
@@ -55,6 +58,10 @@ die() {
     echo "buildtools.sh: $*" >&2
     exit 1
 }
+
+if [[ ! -x "$RETRY_TOOL" ]]; then
+    die "retry-tool not found at $RETRY_TOOL"
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -102,7 +109,7 @@ download() {    # $1 = name, 其余为候选 URL
     fi
     for url in "$@"; do
         echo "   fetch: $url"
-        if curl -fsSL --retry 3 --connect-timeout 20 -o "$out.part" "$url"; then
+        if "$RETRY_TOOL" curl -fsSL --connect-timeout 20 -o "$out.part" "$url"; then
             mv -f "$out.part" "$out"
             break
         fi
@@ -113,6 +120,21 @@ download() {    # $1 = name, 其余为候选 URL
         echo "$BT_SHA256  $out" | sha256sum -c - >/dev/null 2>&1 ||
             die "$name: sha256 mismatch for $out"
     fi
+}
+
+# Clean the destination before every attempt: an interrupted clone leaves a
+# partial repository that the next attempt cannot reuse.
+clone_retry() {  # <dest> <url> [git clone options...]
+    local dest="$1" url="$2"; shift 2
+    if [[ -z "$dest" || -z "$url" ]]; then
+        echo "clone_retry: empty destination or URL" >&2
+        return 1
+    fi
+    "$RETRY_TOOL" bash -c '
+        dest=$1; url=$2; shift 2
+        rm -rf "$dest"
+        exec git clone "$@" "$url" "$dest"
+    ' _ "$dest" "$url" "$@"
 }
 
 assert_clean_prefix() {
@@ -157,7 +179,8 @@ build_one() {
     rm -rf "$src"; mkdir -p "$src"
 
     if [[ "$BT_SOURCE" == git ]]; then
-        git clone --quiet --filter=blob:none "${BT_URL:-}" "$src" || die "$name: clone failed"
+        clone_retry "$src" "${BT_URL:-}" --quiet --filter=blob:none || \
+            die "$name: clone failed"
         git -C "$src" checkout --quiet "$BT_COMMIT" || die "$name: cannot checkout $BT_COMMIT"
     else
         download "$name" "${BT_URLS[@]:-${BT_URL:-}}"
