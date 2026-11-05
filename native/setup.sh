@@ -823,6 +823,34 @@ clone_retry() {  # <dest> <url> [git clone options...]
     ' _ "$dest" "$url" "$@"
 }
 
+# Upstream prunes the toolchain's unversioned shared-library symlinks so that
+# everything except the C library links statically; the libc archives are
+# removed at the same time so glibc itself stays dynamic. Keep the LTO plugin
+# and the core glibc components.
+ctng_prune_toolchain() {
+    [[ -d "$FFBUILD_CTNG_ROOT/$CTNG_TRIPLE/sysroot" ]] || return 1
+    echo "== pruning shared libraries from $FFBUILD_CTNG_ROOT"
+    find "$FFBUILD_CTNG_ROOT" \( -type l \
+        -and -name '*.so' \
+        -and -not -ipath '*plugin*' \
+        -and -not -name 'libdl.*' \
+        -and -not -name 'libc.*' \
+        -and -not -name 'libm.*' \
+        -and -not -name 'libmvec.*' \
+        -and -not -name 'librt.*' \
+        -and -not -name 'libpthread.*' \
+        -and -not -name 'libgomp.*' \
+        \) -delete
+    find "$FFBUILD_CTNG_ROOT" \( \
+        -name 'libdl.a' \
+        -or -name 'libc.a' \
+        -or -name 'libm.a' \
+        -or -name 'libmvec.a' \
+        -or -name 'librt.a' \
+        -or -name 'libpthread.a' \
+        \) -delete
+}
+
 # ------------------------------------------------------------ build tools -----
 # 构建工具全部源码自建：配方在 native/buildtools.d/，驱动在 native/buildtools.sh。
 # 装进 $FFBUILD_BUILDTOOLS_PREFIX/prefix，只放 bin/ 与 share/，不进 PKG_CONFIG_LIBDIR，
@@ -1247,6 +1275,10 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
 
     if [[ "$FORCE_CTNG" -eq 0 && -f "$CTNG_STATE" &&
           "$(cat "$CTNG_STATE")" == "$CTNG_KEY" && -x "$CTNG_CC" ]]; then
+        ctng_prune_toolchain || {
+            echo "setup.sh: $FFBUILD_CTNG_ROOT does not look like a ct-ng toolchain" >&2
+            exit 1
+        }
         echo "== crosstool-ng toolchain already built: $FFBUILD_CTNG_ROOT"
         echo "   use --force-ctng to rebuild it"
     else
@@ -1281,6 +1313,10 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
             unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH PKG_CONFIG
             ./ct-ng build
         )
+        ctng_prune_toolchain || {
+            echo "setup.sh: ct-ng finished but $FFBUILD_CTNG_ROOT/$CTNG_TRIPLE/sysroot is missing" >&2
+            exit 1
+        }
         if [[ ! -x "$CTNG_CC" ]]; then
             echo "setup.sh: ct-ng finished but $CTNG_CC is missing" >&2
             exit 1
