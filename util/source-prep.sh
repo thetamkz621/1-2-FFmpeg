@@ -52,7 +52,20 @@ ffmpeg_source_prepare() {
             cp -a "$src/." "$FFMPEG_DIR/" || return 1
         fi
     elif [[ "$src" == *://* || "$src" == *@*:* ]]; then
-        git clone --filter=blob:none --branch="$GIT_BRANCH" "$src" "$FFMPEG_DIR" || return 1
+        # A dropped connection leaves a partial clone and a checkout that
+        # cannot fetch its promisor objects. Retry the whole clone, cleaning
+        # the destination first; the FFmpeg repository is large enough that
+        # the default 120 s attempt timeout is too short.
+        local retry="$FFBUILD_REPO_ROOT/util/bin/retry-tool"
+        if [[ ! -x "$retry" ]]; then
+            echo "build.sh: retry-tool not found at $retry" >&2
+            return 1
+        fi
+        RETRY_TIMEOUT="${RETRY_TIMEOUT:-3600}" "$retry" bash -c '
+            dest=$1; url=$2; branch=$3
+            rm -rf "$dest"
+            exec git clone --filter=blob:none --branch="$branch" "$url" "$dest"
+        ' _ "$FFMPEG_DIR" "$src" "$GIT_BRANCH" || return 1
     else
         echo "build.sh: FFMPEG_REPO=$src does not exist" >&2
         return 1
