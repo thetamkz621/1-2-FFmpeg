@@ -827,6 +827,11 @@ clone_retry() {  # <dest> <url> [git clone options...]
 # everything except the C library links statically; the libc archives are
 # removed at the same time so glibc itself stays dynamic. Keep the LTO plugin
 # and the core glibc components.
+#
+# This must run before dependencies are built: with libgomp.so removed,
+# CMake's OpenMP probes fail and soxr/vidstab build serially, which is the
+# upstream behaviour.  Reusing a build tree created before pruning leaves
+# OpenMP objects behind and breaks shared-library links.
 ctng_prune_toolchain() {
     [[ -d "$FFBUILD_CTNG_ROOT/$CTNG_TRIPLE/sysroot" ]] || return 1
     echo "== pruning shared libraries from $FFBUILD_CTNG_ROOT"
@@ -839,7 +844,6 @@ ctng_prune_toolchain() {
         -and -not -name 'libmvec.*' \
         -and -not -name 'librt.*' \
         -and -not -name 'libpthread.*' \
-        -and -not -name 'libgomp.*' \
         \) -delete
     find "$FFBUILD_CTNG_ROOT" \( \
         -name 'libdl.a' \
