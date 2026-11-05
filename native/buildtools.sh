@@ -32,7 +32,12 @@ BT_STATE="${BT_STATE:-$REPO_ROOT/.buildtools/state}"
 BT_LOG="${BT_LOG:-$REPO_ROOT/.buildtools/log}"
 BT_SRC="${BT_SRC:-$REPO_ROOT/.buildtools/src}"
 BT_CACHE="${BT_CACHE:-$REPO_ROOT/.cache/tools}"
+RETRY_TOOL="$REPO_ROOT/util/bin/retry-tool"
+RETRY_TIMEOUT="${RETRY_TIMEOUT:-600}"
+export RETRY_TIMEOUT
 BT_JOBS="${BT_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+BT_FAILED="$BT_STATE/failed-tools"
+BT_CURRENT_NAME=""
 export BT_PREFIX BT_JOBS BT_CACHE
 
 DO_BUILD=1
@@ -42,7 +47,21 @@ KEEP_GOING=0
 WANT=()
 FORCE=()
 
-die() { echo "buildtools.sh: $*" >&2; exit 1; }
+record_failure() {
+    [[ -n "${BT_CURRENT_NAME:-}" ]] || return 0
+    mkdir -p "$BT_STATE"
+    printf '%s\n' "$BT_CURRENT_NAME" >> "$BT_FAILED"
+}
+
+die() {
+    record_failure
+    echo "buildtools.sh: $*" >&2
+    exit 1
+}
+
+if [[ ! -x "$RETRY_TOOL" ]]; then
+    die "retry-tool not found at $RETRY_TOOL"
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -90,7 +109,7 @@ download() {    # $1 = name, 其余为候选 URL
     fi
     for url in "$@"; do
         echo "   fetch: $url"
-        if curl -fsSL --retry 3 --connect-timeout 20 -o "$out.part" "$url"; then
+        if "$RETRY_TOOL" curl -fsSL --connect-timeout 20 -o "$out.part" "$url"; then
             mv -f "$out.part" "$out"
             break
         fi
@@ -101,6 +120,21 @@ download() {    # $1 = name, 其余为候选 URL
         echo "$BT_SHA256  $out" | sha256sum -c - >/dev/null 2>&1 ||
             die "$name: sha256 mismatch for $out"
     fi
+}
+
+# Clean the destination before every attempt: an interrupted clone leaves a
+# partial repository that the next attempt cannot reuse.
+clone_retry() {  # <dest> <url> [git clone options...]
+    local dest="$1" url="$2"; shift 2
+    if [[ -z "$dest" || -z "$url" ]]; then
+        echo "clone_retry: empty destination or URL" >&2
+        return 1
+    fi
+    "$RETRY_TOOL" bash -c '
+        dest=$1; url=$2; shift 2
+        rm -rf "$dest"
+        exec git clone "$@" "$url" "$dest"
+    ' _ "$dest" "$url" "$@"
 }
 
 assert_clean_prefix() {
@@ -129,6 +163,7 @@ check_binary() {  # $1 = name
 
 build_one() {
     local recipe="$1" name; name="$(tool_name "$recipe")"
+    BT_CURRENT_NAME="$name"
     load_meta "$recipe" "$name"
 
     local dep
@@ -144,7 +179,8 @@ build_one() {
     rm -rf "$src"; mkdir -p "$src"
 
     if [[ "$BT_SOURCE" == git ]]; then
-        git clone --quiet --filter=blob:none "${BT_URL:-}" "$src" || die "$name: clone failed"
+        clone_retry "$src" "${BT_URL:-}" --quiet --filter=blob:none || \
+            die "$name: clone failed"
         git -C "$src" checkout --quiet "$BT_COMMIT" || die "$name: cannot checkout $BT_COMMIT"
     else
         download "$name" "${BT_URLS[@]:-${BT_URL:-}}"
@@ -176,6 +212,7 @@ build_one() {
     local _ver=""
     _ver="$("$BT_PREFIX/bin/$BT_BIN" --version 2>/dev/null | head -1)"
     echo "   ok: $BT_PREFIX/bin/$BT_BIN${_ver:+ ($_ver)}"
+    BT_CURRENT_NAME=""
 }
 
 main() {
@@ -204,6 +241,9 @@ main() {
         return $rc
     fi
 
+    mkdir -p "$BT_STATE"
+    : > "$BT_FAILED"
+
     local -a list=()
     local -a failed=()
     if (( ${#WANT[@]} )); then
@@ -213,6 +253,7 @@ main() {
     fi
 
     for name in "${list[@]}"; do
+        BT_CURRENT_NAME="$name"
         recipe="$(ls -1 "$RECIPE_DIR"/*-"$name".sh 2>/dev/null | head -1)"
         [[ -n "$recipe" ]] || die "no recipe for '$name'"
         load_meta "$recipe" "$name"
@@ -222,6 +263,7 @@ main() {
         fi
         if is_done "$name" "$(stamp)"; then
             echo "== $name $BT_VERSION (already built)"
+            BT_CURRENT_NAME=""
             continue
         fi
         if (( KEEP_GOING )); then

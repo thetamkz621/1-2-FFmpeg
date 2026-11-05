@@ -53,6 +53,22 @@ After making the change, rerun `--check` and confirm that the `c++23 string_view
 - Where the package is unavailable (for example, on RHEL 8 and openSUSE Leap 16), no distribution package is required. Rerun `./native/setup.sh`; the script provisions `num` through opam into `.buildtools/opam/root`.
 - `--check` distinguishes a missing `num` package from a missing OCaml toolchain. The latter requires `ocaml`, `findlib` and `ocamlbuild` to be installed first.
 
+## Build failures with an official release source archive
+
+**Symptoms**: When `FFMPEG_REPO` points to a directory unpacked from an official release source archive, compilation of FFmpeg fails in a file that calls a dependency API. For example:
+
+```
+libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
+  from incompatible pointer type
+```
+
+**Cause**: dependency stages are pinned to current upstream revisions, whereas an official release archive is frozen at its tag. Compatibility changes made after the tag exist only on the release branch. The `RELEASE` check compares the major and minor version with the version addin; it does not check dependency APIs.
+
+**Resolution**:
+
+1. Prefer a checkout of the release branch: point `FFMPEG_REPO` at its working tree, or leave `FFMPEG_REPO` unset and select the corresponding version addin.
+2. If the archive must be used, skip the incompatible stage, for example `FFBUILD_SKIP_STAGES=openapv`. A skipped stage is also removed from FFmpeg's configure flags, so the resulting build no longer provides that feature.
+
 ## Permission errors
 
 **Symptoms**: `Permission denied`; or a build tool's configure stage reports `C compiler cannot create executables` (for example, `m4`).
@@ -98,7 +114,7 @@ If an individual tool still has a partially populated build directory, remove th
   http-proxy-port = 8080
   ```
   Alternatively, pass `--config-option servers:global:http-proxy-host=...` and `--config-option servers:global:http-proxy-port=...` to the svn command.
-- Retry settings: `RETRY_MAX` (attempts, default 10), `RETRY_TIMEOUT` (initial timeout, default 120 s), `RETRY_TIMEOUT_INC` (backoff increment, default 60 s), and `RETRY_SLEEP_MAX` (maximum backoff, default 90 s). These variables apply only to fetches that pass through `retry-tool`, namely `download.sh` and `build.sh`; they do not currently affect the opam, Implib, or managed-tool downloads performed by `setup.sh`. See [build_EN.md](build_EN.md#cache-and-retries).
+- Retry settings: `RETRY_MAX` (attempts, default 10), `RETRY_TIMEOUT` (initial timeout, default 120 s), `RETRY_TIMEOUT_INC` (backoff increment, default 60 s), and `RETRY_SLEEP_MAX` (maximum backoff, default 90 s). These variables apply to every fetch that passes through `retry-tool`, including the opam, Implib, rustup, crosstool-ng and managed-tool downloads performed by `setup.sh`, as well as `download.sh` and `build.sh`. HTTP 4xx responses are retried too; set `RETRY_MAX=1` temporarily when debugging a mirror URL. See [build_EN.md](build_EN.md#cache-and-retries).
 
 ## Incomplete Python venv
 

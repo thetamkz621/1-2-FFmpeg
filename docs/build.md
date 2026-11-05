@@ -51,6 +51,23 @@
 | `FFBUILD_SKIP_STAGES=a,b` | 跳过指定 stage，以逗号或空格分隔（例如缺少 Rust 时跳过 `rav1e` 与 `librsvg`） |
 | `FFBUILD_EXTRA_VERSION=<str>` | 传递给 FFmpeg 的 `--extra-version`，默认 `YYYYMMDD`；影响 `ffmpeg -version` 输出，不影响产物名称 |
 
+## FFmpeg 源码
+
+`FFMPEG_REPO` 指定 FFmpeg 源码，默认 `https://github.com/FFmpeg/FFmpeg.git`。
+
+| 取值 | 行为 |
+|---|---|
+| 远程 git 地址 | 克隆版本附加项对应的分支（默认 `master`）；`GIT_BRANCH_OVERRIDE` 覆盖该分支 |
+| 本地 git 仓库 | 克隆该仓库并检出其当前 `HEAD`；设置 `GIT_BRANCH_OVERRIDE` 时改为检出该分支或提交 |
+| 本地普通目录 | 复制到构建根；目录必须包含 `configure` |
+| 不存在的路径 | 报错退出 |
+
+- 源码始终复制或克隆到 `$FFBUILD_ROOT/ffmpeg`，原目录不会被修改。
+- 本地 git 仓库中未提交的改动不会进入构建；需要包含这些改动时，将工作树复制为普通目录后指向该副本。
+- 源码根含 `RELEASE` 时，其主次版本必须与版本附加项一致（例如 `RELEASE` 为 `8.1.1` 时传入 `8.1`），否则构建退出。
+- `GIT_BRANCH_OVERRIDE` 对本地普通目录无效。
+- 源码既无 `RELEASE` 也不是 git 仓库时，`ffbuild/version.sh` 会把产物版本记为 `N`。
+
 ## 网络
 
 | 变量 | 作用 |
@@ -105,4 +122,6 @@ artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器>-<日期>.t
 | `RETRY_TIMEOUT_INC` | 退避增量（秒），默认 `60` |
 | `RETRY_SLEEP_MAX` | 最大退避时间（秒），默认 `90` |
 
-这些参数仅影响经 `retry-tool` 的下载，即 `download.sh` 与 `build.sh`；`setup.sh` 自身的下载当前不受其控制。
+这些参数对所有取源生效：`setup.sh`（opam、Implib.so、rustup、crosstool-ng 与托管构建工具源码）、`download.sh`、`build.sh` 以及 `buildtools.sh` 都经 `retry-tool` 下载。
+
+未显式设置时，`download.sh` 使用 600 秒超时与 8 次尝试，`setup.sh` 与 `buildtools.sh` 使用 600 秒超时。HTTP 4xx 同样按重试次数退避；调试镜像地址时可临时设 `RETRY_MAX=1`。
