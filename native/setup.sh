@@ -808,6 +808,24 @@ if [[ ! -x "$RETRY_TOOL" ]]; then
     exit 1
 fi
 
+# Fetch only the pinned ct-ng commit. A full clone transfers far more than the
+# build needs and is markedly more likely to hit TLS resets on slow links.
+ctng_fetch_source() {  # <dest> <url> <commit>
+    local dest="$1" url="$2" commit="$3"
+    if [[ -z "$dest" || -z "$url" || -z "$commit" ]]; then
+        echo "ctng_fetch_source: empty destination, URL, or commit" >&2
+        return 1
+    fi
+    RETRY_MAX="${CTNG_FETCH_ATTEMPTS:-3}" "$RETRY_TOOL" bash -c '
+        dest=$1; url=$2; commit=$3
+        rm -rf "$dest"
+        mkdir -p "$dest"
+        git -C "$dest" init -q
+        git -C "$dest" fetch --depth=1 "$url" "$commit"
+        git -C "$dest" checkout -q --detach FETCH_HEAD
+    ' _ "$dest" "$url" "$commit"
+}
+
 # Clean the destination before every attempt: an interrupted clone leaves a
 # partial repository that the next attempt cannot reuse.
 clone_retry() {  # <dest> <url> [git clone options...]
@@ -1289,10 +1307,17 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
         echo "== building crosstool-ng toolchain (this takes a long time) =="
         CTNG_SRC="$FFBUILD_ROOT/ctng-src"
         mkdir -p "$FFBUILD_ROOT" "$FFBUILD_CTNG_ROOT/sources" "$(dirname "$CTNG_STATE")"
-        if [[ ! -d "$CTNG_SRC/.git" ]]; then
-            clone_retry "$CTNG_SRC" "$CTNG_REPO" --filter=blob:none
+        if [[ ! -d "$CTNG_SRC/.git" ]] ||
+           ! git -C "$CTNG_SRC" cat-file -e "${CTNG_COMMIT}^{commit}" 2>/dev/null; then
+            if ! ctng_fetch_source "$CTNG_SRC" "$CTNG_REPO" "$CTNG_COMMIT"; then
+                echo "setup.sh: shallow fetch of $CTNG_COMMIT failed; falling back to a full clone" >&2
+                clone_retry "$CTNG_SRC" "$CTNG_REPO" --filter=blob:none || {
+                    echo "setup.sh: cannot fetch crosstool-ng" >&2
+                    exit 1
+                }
+            fi
         fi
-        git -C "$CTNG_SRC" checkout --quiet "$CTNG_COMMIT" || {
+        git -C "$CTNG_SRC" checkout --quiet --detach "$CTNG_COMMIT" || {
             echo "setup.sh: cannot check out crosstool-ng $CTNG_COMMIT" >&2
             exit 1
         }
