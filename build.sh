@@ -83,10 +83,34 @@ done
 # stages see the resolved compilers (including any override).
 ffbuild_write_toolchain_files
 
+# A 64-bit wine can be installed while its 32-bit support is missing. The cross
+# file still names wine as exe_wrapper, so meson would fail its first feature
+# probe with an opaque loader error; compile and run a trivial PE once here.
+ffbuild_check_wine32() {
+    local dir
+    dir="$(mktemp -d)"
+    printf 'int main(void) { return 0; }\n' > "$dir/probe.c"
+    # shellcheck disable=SC2086
+    if ! $CC -o "$dir/probe.exe" "$dir/probe.c" >"$dir/build.log" 2>&1; then
+        echo "build.sh: cannot compile a 32-bit Windows probe with '$CC'" >&2
+        sed 's/^/          /' "$dir/build.log" >&2
+        rm -rf "$dir"
+        return 1
+    fi
+    if ! WINEPREFIX="$dir/prefix" wine "$dir/probe.exe" >/dev/null 2>&1; then
+        echo "build.sh: wine cannot run 32-bit Windows binaries" >&2
+        echo "          install the 32-bit part of wine; some distributions split" >&2
+        echo "          it into a separate package or require the i386 architecture" >&2
+        rm -rf "$dir"
+        return 1
+    fi
+    rm -rf "$dir"
+}
+
 case "$TARGET" in
 linux64)
     ;;
-win64)
+win32|win64)
     # Only the ctng toolchain can produce Windows binaries here; the host
     # compilers are Linux-only.
     if [[ "$FFBUILD_TOOLCHAIN_MODE" != ctng ]]; then
@@ -100,9 +124,10 @@ win64)
         echo "          install it, e.g. ./native/setup.sh --install --ctng-target $TARGET" >&2
         exit 2
     fi
+    [[ "$TARGET" == win32 ]] && { ffbuild_check_wine32 || exit 2; }
     ;;
 *)
-    echo "build.sh: unsupported target '$TARGET' (supported: linux64, win64)" >&2
+    echo "build.sh: unsupported target '$TARGET' (supported: linux64, win64, win32)" >&2
     exit 2
     ;;
 esac
