@@ -456,8 +456,15 @@ fi
     cp "$FFMPEG_DIR/$LICENSE_FILE" "$PKGROOT/LICENSE.txt"
 
 cd "$FFBUILD_ROOT/pkgroot"
-OUTPUT_FNAME="${BUILD_NAME}.tar.xz"
-tar -I "xz -T0" -cf "$ARTIFACTS_PATH/${OUTPUT_FNAME}" "$BUILD_NAME"
+# Upstream ships Windows builds as zip and every other target as tar.xz;
+# keep the extension users and release tooling expect.
+if [[ "$TARGET" == win* ]]; then
+    OUTPUT_FNAME="${BUILD_NAME}.zip"
+    zip -9 -r -q "$ARTIFACTS_PATH/${OUTPUT_FNAME}" "$BUILD_NAME"
+else
+    OUTPUT_FNAME="${BUILD_NAME}.tar.xz"
+    tar -I "xz -T0" -cf "$ARTIFACTS_PATH/${OUTPUT_FNAME}" "$BUILD_NAME"
+fi
 cd "$FFBUILD_REPO_ROOT"
 
 echo
