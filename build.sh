@@ -213,6 +213,21 @@ ffbuild_stage_skipped() {
     return 1
 }
 
+# Evaluate one script's ffbuild_enabled. Directory stages (50-vaapi, 45-fonts,
+# 50-dvd, ...) aggregate several scripts, and the stage-level check only sees
+# the last one, so each script has to be asked separately. Upstream's Dockerfile
+# emitter does the same when it decides whether to emit a RUN step.
+script_enabled() {
+    local SCRIPT="$1"
+    (
+        SELF="$SCRIPT"
+        # shellcheck disable=SC1090
+        source "$SCRIPT" 2>/dev/null || exit 1
+        declare -F ffbuild_enabled >/dev/null || exit 0
+        ffbuild_enabled
+    )
+}
+
 run_one_script() {
     local SCRIPT="$1"
     local STAGENAME
@@ -223,6 +238,11 @@ run_one_script() {
     # already completed are skipped unless FFBUILD_FORCE is set.
     if [[ -z "${FFBUILD_FORCE:-}" && -f "$FFBUILD_STATE/${STAGENAME}.done" ]]; then
         echo "   (already built: $STAGENAME)"
+        return 0
+    fi
+
+    if ! script_enabled "$SCRIPT"; then
+        echo "-- skip (not applicable to $TARGET/$VARIANT): $SCRIPT"
         return 0
     fi
 
