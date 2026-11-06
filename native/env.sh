@@ -412,9 +412,20 @@ else
     export FFBUILD_CMAKE_SYSROOT="${FFBUILD_CMAKE_SYSROOT:-}"
 fi
 
-# Host tools (equal to target tools for native builds).
-export HOST_CC="${HOST_CC:-$CC}"
-export HOST_CXX="${HOST_CXX:-$CXX}"
+# Host tools. For native builds they equal the target tools; for a cross
+# toolchain they must stay on the host compiler: GMP's configure builds helper
+# programs with HOST_CC, and a cross driver cannot run on the build machine
+# ("Specified HOST_CC doesn't seem to work").
+if [[ -n "${HOST_CC:-}" ]]; then
+    export HOST_CC
+elif [[ -z "$FFBUILD_CROSS_PREFIX" ]]; then
+    export HOST_CC="$CC"
+fi
+if [[ -n "${HOST_CXX:-}" ]]; then
+    export HOST_CXX
+elif [[ -z "$FFBUILD_CROSS_PREFIX" ]]; then
+    export HOST_CXX="$CXX"
+fi
 export HOST_CFLAGS="${HOST_CFLAGS:--O2 -pipe}"
 export HOST_CXXFLAGS="${HOST_CXXFLAGS:--O2 -pipe}"
 
