@@ -40,6 +40,9 @@ source util/vars.sh "$TARGET" "$VARIANT" "$@"
 # so the target/variant contract must be exported for them to see it.
 export TARGET VARIANT ADDINS_STR
 export LICENSE_FILE
+# Upstream's generate.sh exports this into the container; stage scripts read it
+# directly (50-ffnvcodec selects the SDK branch with it).
+export FFVER="$(ffbuild_ffver)"
 
 # shellcheck source=native/env.sh
 source native/env.sh
