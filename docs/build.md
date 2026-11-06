@@ -14,6 +14,28 @@
 
 构建开始前会自动运行 `native/download.sh --needed <目标> <变体>` 获取所需源码；`FFBUILD_SKIP_DOWNLOAD=1` 可跳过该步骤（复用已有缓存），`FFBUILD_FFMPEG_ONLY=1` 同样会跳过。
 
+## 目标
+
+| 目标 | 工具链 | 说明 |
+|---|---|---|
+| `linux64` | host `gcc` / `clang`，或 `ctng` | 同架构原生或交叉构建 |
+| `win64` | 仅 `ctng` | 需要 wine；缺少 wine 或未使用 ctng 时 `build.sh` 直接退出 |
+
+```bash
+# linux64，宿主工具链
+./build.sh linux64 gpl-shared 9.0
+
+# linux64，crosstool-ng（glibc 2.28 基线）
+./native/setup.sh --install --with-ctng
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl-shared 9.0
+
+# win64
+./native/setup.sh --install --with-ctng --ctng-target win64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+```
+
+目标由 `build.sh` 的第一个参数决定；构建工具链时用 `setup.sh --ctng-target` 指定同一个目标。
+
 ## 编译器与工具链
 
 | 变量 | 作用 |
@@ -21,12 +43,13 @@
 | `FFBUILD_TOOLCHAIN_MODE` | `host`（默认，按 `cc` → `gcc` → `clang` 探测）/ `clang` / `gcc` / `ctng` |
 | `FFBUILD_CC` `FFBUILD_CXX` `FFBUILD_LD` `FFBUILD_AR` … | 逐个覆盖编译器与工具（也可使用 `CC=` / `CXX=` 等） |
 | `FFBUILD_TOOLCHAIN_TRIPLE` | 覆盖传递给 stage 的 `--host` 三元组 |
-| `FFBUILD_CTNG_ROOT` | crosstool-ng 工具链位置，默认 `.buildtools/ctng`（不受 `FFBUILD_CLEAN` 影响） |
+| `FFBUILD_CTNG_ROOT` | crosstool-ng 工具链位置，默认 `.buildtools/ctng/<target>`（不受 `FFBUILD_CLEAN` 影响） |
 
-`clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先运行 `./native/setup.sh --with-ctng`。
+`clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先按目标运行 `./native/setup.sh --with-ctng --ctng-target <target>`。
 
-> ctng 工具链位于 `.buildtools/ctng`，首次构建包含 glibc 与 GCC，耗时较长。  
-> 裁剪在依赖构建前执行，因此 `soxr` 与 `vidstab` 按串行编译；宿主 `gcc` / `clang` 模式不受影响。
+> ctng 工具链位于 `.buildtools/ctng/<target>`；linux64 首次构建包含 glibc 与 GCC，win64 包含 mingw-w64 与 GCC。  
+> 裁剪在依赖构建前执行，因此 `soxr` 与 `vidstab` 按串行编译；宿主 `gcc` / `clang` 模式不受影响。  
+> win64 的 meson 阶段通过 wine 运行目标程序；缺少 wine 时 `build.sh` 在依赖构建前退出。
 
 ## 编译参数
 
@@ -53,6 +76,8 @@
 | `FFBUILD_BUILD_DATE=YYYYMMDD` | 固定产物名称中的日期 |
 | `FFBUILD_SKIP_STAGES=a,b` | 跳过指定 stage，以逗号或空格分隔（例如缺少 Rust 时跳过 `rav1e` 与 `librsvg`） |
 | `FFBUILD_EXTRA_VERSION=<str>` | 传递给 FFmpeg 的 `--extra-version`，默认 `YYYYMMDD`；影响 `ffmpeg -version` 输出，不影响产物名称 |
+
+构建根使用 `<target>:<compiler>` 标记。host 与 ctng、linux64 与 win64 不能共用一个构建根；切换时使用独立的 `FFBUILD_ROOT`，或设置 `FFBUILD_CLEAN=1`。
 
 ## FFmpeg 源码
 
@@ -94,7 +119,7 @@ source native/env.sh && ffbuild_env_dump
 | `ffbuild/state` | 断点续建状态 |
 | `ffbuild/destdir` | 各 stage 的 `DESTDIR`，stage 结束后合并到 `prefix` |
 | `ffbuild/pkgroot` | 打包暂存目录 |
-| `.buildtools/ctng` | crosstool-ng 工具链（`ctng` 模式） |
+| `.buildtools/ctng/<target>` | crosstool-ng 工具链（`ctng` 模式） |
 | `.buildtools/` | 托管构建工具、venv、Rust、opam |
 | `.cache/downloads/` | 源码缓存 |
 | `artifacts/` | 构建产物 |
@@ -105,7 +130,8 @@ source native/env.sh && ffbuild_env_dump
 artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器或工具链>-<日期>.tar.xz
 ```
 
-> 该字段在宿主 `gcc` / `clang` 模式下为 `gcc` / `clang`，在 `ctng` 模式下为 `ctng`。
+> 该字段在宿主 `gcc` / `clang` 模式下为 `gcc` / `clang`，在 `ctng` 模式下为 `ctng`。  
+> `win64` 产物为 `bin/*.exe` 与 `bin/*.dll`，导入库在 `lib/`；运行时依赖 UCRT，不依赖 libgcc、libstdc++ 或 winpthread 的 DLL。
 
 ## 缓存与重试
 

@@ -68,6 +68,14 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 1. 优先使用发布分支的检出：将 `FFMPEG_REPO` 指向该分支的工作树，或不设置 `FFMPEG_REPO` 并使用对应的版本附加项。
 2. 必须使用该源码包时，跳过不兼容的阶段，例如 `FFBUILD_SKIP_STAGES=openapv`。被跳过的阶段同时从 FFmpeg 的 configure 参数中移除，产物不再包含对应功能。
 
+## win64 构建提示缺少 wine
+
+**症状**：`./build.sh win64 …` 在依赖构建前退出，提示 `target 'win64' needs wine`；未使用 ctng 时则提示需要 `FFBUILD_TOOLCHAIN_MODE=ctng`。
+
+**原因**：win64 只能由 crosstool-ng 工具链生成；meson 的交叉文件把 wine 作为 `exe_wrapper`，配置阶段需要运行目标程序（例如 glib 的特性探测）。
+
+**处理**：运行 `./native/setup.sh --install --with-ctng --ctng-target win64`，它会安装 wine 并构建 win64 工具链；随后使用 `FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 …`。wine 也可以由发行版包管理器单独安装。
+
 ## 权限错误
 
 **症状**：出现 `Permission denied`；或构建工具的 configure 阶段报 `C compiler cannot create executables`（例如 `m4`）。

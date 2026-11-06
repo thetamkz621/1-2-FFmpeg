@@ -1,12 +1,16 @@
 #!/bin/bash
 # shellcheck shell=bash
 #
-# native/env.sh — Environment contract for Docker-free linux64 builds.
+# native/env.sh — Environment contract for Docker-free builds.
 #
-# This file replaces the `ENV` block of images/base-linux64/Dockerfile.
+# This file replaces the `ENV` block of the images/base-<target> Dockerfiles.
 # It is *sourced* by native/setup.sh, native/download.sh and build.sh.
 #
 # ---------------------------------------------------------------- contract ----
+# Target selection
+#   FFBUILD_TARGET         linux64 (default) | win64; see native/targets.conf
+#                          (build.sh derives it from its first argument)
+#
 # Toolchain selection
 #   FFBUILD_TOOLCHAIN_MODE host (default) | clang | gcc | ctng
 #                          host: auto-detect (cc -> gcc -> clang)
@@ -67,6 +71,56 @@ if [[ -z "$FFBUILD_REPO_ROOT" || ! -d "$FFBUILD_REPO_ROOT/scripts.d" ]]; then
     exit 1
 fi
 
+# ---------------------------------------------------------------- target ------
+# Everything that differs between targets lives in native/targets.conf: FFmpeg's
+# --arch/--target-os, the Rust target, the ctng triple and config, the
+# meson/cmake descriptor contents and the toolchain pruning style. build.sh
+# exports TARGET before sourcing this file; setup.sh exports FFBUILD_TARGET.
+FFBUILD_TARGET="${FFBUILD_TARGET:-${TARGET:-linux64}}"
+export FFBUILD_TARGET
+FFBUILD_TARGETS_CONF="$FFBUILD_REPO_ROOT/native/targets.conf"
+export FFBUILD_TARGETS_CONF
+
+_ffbuild_target_row() {  # <target> -> matching row, or nothing
+    [[ -r "$FFBUILD_TARGETS_CONF" ]] || return 1
+    awk -F'|' -v t="$1" '
+        /^[[:space:]]*#/ { next }
+        NF < 3 { next }
+        { v = $1; gsub(/^[ \t]+|[ \t]+$/, "", v); if (v == t) { print; exit } }
+    ' "$FFBUILD_TARGETS_CONF"
+}
+
+_ffbuild_target_field() {  # <row> <column>
+    printf '%s\n' "$1" | awk -F'|' -v c="$2" '
+        { v = $c; gsub(/^[ \t]+|[ \t]+$/, "", v); print v }
+    '
+}
+
+_ffbuild_trow="$(_ffbuild_target_row "$FFBUILD_TARGET")"
+if [[ -z "$_ffbuild_trow" ]]; then
+    echo "native/env.sh: unknown target '$FFBUILD_TARGET'" >&2
+    echo "  known targets: $(awk -F'|' '/^[[:space:]]*[^#[:space:]]/ { gsub(/^[ \t]+|[ \t]+$/, "", $1); printf "%s ", $1 }' "$FFBUILD_TARGETS_CONF" 2>/dev/null)" >&2
+    return 1 2>/dev/null || exit 1
+fi
+FFBUILD_TARGET_ARCH="$(_ffbuild_target_field "$_ffbuild_trow" 2)"
+FFBUILD_TARGET_OS="$(_ffbuild_target_field "$_ffbuild_trow" 3)"
+FFBUILD_TARGET_RUST="$(_ffbuild_target_field "$_ffbuild_trow" 4)"
+FFBUILD_TARGET_CTNG_TRIPLE="$(_ffbuild_target_field "$_ffbuild_trow" 5)"
+FFBUILD_TARGET_CTNG_CONFIG="$(_ffbuild_target_field "$_ffbuild_trow" 6)"
+FFBUILD_TARGET_MESON_SYSTEM="$(_ffbuild_target_field "$_ffbuild_trow" 7)"
+FFBUILD_TARGET_CMAKE_SYSTEM="$(_ffbuild_target_field "$_ffbuild_trow" 8)"
+FFBUILD_TARGET_CMAKE_VERSION="$(_ffbuild_target_field "$_ffbuild_trow" 9)"
+FFBUILD_TARGET_WIN_TOOLS="$(_ffbuild_target_field "$_ffbuild_trow" 10)"
+[[ "$FFBUILD_TARGET_WIN_TOOLS" == "-" ]] && FFBUILD_TARGET_WIN_TOOLS=""
+FFBUILD_TARGET_WINE="$(_ffbuild_target_field "$_ffbuild_trow" 11)"
+FFBUILD_TARGET_PRUNE="$(_ffbuild_target_field "$_ffbuild_trow" 12)"
+export FFBUILD_TARGET_ARCH FFBUILD_TARGET_OS FFBUILD_TARGET_RUST
+export FFBUILD_TARGET_CTNG_TRIPLE FFBUILD_TARGET_CTNG_CONFIG
+export FFBUILD_TARGET_MESON_SYSTEM FFBUILD_TARGET_CMAKE_SYSTEM
+export FFBUILD_TARGET_CMAKE_VERSION
+export FFBUILD_TARGET_WIN_TOOLS FFBUILD_TARGET_WINE FFBUILD_TARGET_PRUNE
+unset _ffbuild_trow
+
 # Snapshot caller-supplied values *before* we install defaults, so that a plain
 # `CC=clang ./build.sh ...` is honoured as an override.
 _FFBUILD_ENV_SNAP_CC="${CC-}"
@@ -116,8 +170,9 @@ export FFBUILD_DESTPREFIX="$FFBUILD_DESTDIR$FFBUILD_PREFIX"
 export FFBUILD_WORK="$FFBUILD_ROOT/work"
 export FFBUILD_LOG="$FFBUILD_ROOT/log"
 # crosstool-ng is expensive to build; keep it outside FFBUILD_ROOT so that
-# FFBUILD_CLEAN=1 does not throw the toolchain away with the build tree.
-export FFBUILD_CTNG_ROOT="${FFBUILD_CTNG_ROOT:-$FFBUILD_REPO_ROOT/.buildtools/ctng}"
+# FFBUILD_CLEAN=1 does not throw the toolchain away with the build tree. Each
+# target gets its own prefix: the sysroot and compilers cannot be shared.
+export FFBUILD_CTNG_ROOT="${FFBUILD_CTNG_ROOT:-${FFBUILD_BUILDTOOLS_PREFIX:-$FFBUILD_REPO_ROOT/.buildtools}/ctng/$FFBUILD_TARGET}"
 
 # --------------------------------------------------------------- helpers -----
 # pick <FFBUILD_VAR> <snapshot> <default>
@@ -199,7 +254,7 @@ _ffbuild_cc_kind() {
 
 case "$FFBUILD_TOOLCHAIN_MODE" in
 ctng)
-    FFBUILD_TOOLCHAIN_TRIPLE="${FFBUILD_TOOLCHAIN_TRIPLE:-x86_64-ffbuild-linux-gnu}"
+    FFBUILD_TOOLCHAIN_TRIPLE="${FFBUILD_TOOLCHAIN_TRIPLE:-$FFBUILD_TARGET_CTNG_TRIPLE}"
     FFBUILD_CROSS_PREFIX="${FFBUILD_TOOLCHAIN_TRIPLE}-"
     export PATH="$FFBUILD_CTNG_ROOT/bin:$PATH"
     _ffbuild_def_cc="${FFBUILD_CROSS_PREFIX}gcc"
@@ -254,6 +309,17 @@ export AR="$(_ffbuild_pick FFBUILD_AR     "$_FFBUILD_ENV_SNAP_AR"     "$_ffbuild
 export RANLIB="$(_ffbuild_pick FFBUILD_RANLIB "$_FFBUILD_ENV_SNAP_RANLIB" "$_ffbuild_def_ranlib")"
 export NM="$(_ffbuild_pick FFBUILD_NM     "$_FFBUILD_ENV_SNAP_NM"     "$_ffbuild_def_nm")"
 export STRIP="$(_ffbuild_pick FFBUILD_STRIP "$_FFBUILD_ENV_SNAP_STRIP" "$_ffbuild_def_strip")"
+
+# Target-specific binutils that autotools/libtool look up by name. Only the
+# ctng toolchain provides them; host compilers cannot build for these targets.
+if [[ -n "$FFBUILD_TARGET_WIN_TOOLS" && -n "$FFBUILD_CROSS_PREFIX" ]]; then
+    for _t in $FFBUILD_TARGET_WIN_TOOLS; do
+        _u="${_t^^}"
+        printf -v "$_u" '%s' "${FFBUILD_CROSS_PREFIX}${_t}"
+        export "$_u"
+    done
+    unset _t _u
+fi
 
 # Fail early instead of letting every stage report "command not found".
 # `setup.sh --check` is the exception: it exists to diagnose bare hosts, so with
@@ -346,16 +412,38 @@ else
     export FFBUILD_CMAKE_SYSROOT="${FFBUILD_CMAKE_SYSROOT:-}"
 fi
 
-# Host tools (equal to target tools for native builds).
-export HOST_CC="${HOST_CC:-$CC}"
-export HOST_CXX="${HOST_CXX:-$CXX}"
+# Host tools. For native builds they equal the target tools; for a cross
+# toolchain they must stay on the host compiler: GMP's configure builds helper
+# programs with HOST_CC, and a cross driver cannot run on the build machine
+# ("Specified HOST_CC doesn't seem to work").
+if [[ -n "${HOST_CC:-}" ]]; then
+    export HOST_CC
+elif [[ -z "$FFBUILD_CROSS_PREFIX" ]]; then
+    export HOST_CC="$CC"
+fi
+if [[ -n "${HOST_CXX:-}" ]]; then
+    export HOST_CXX
+elif [[ -z "$FFBUILD_CROSS_PREFIX" ]]; then
+    export HOST_CXX="$CXX"
+fi
 export HOST_CFLAGS="${HOST_CFLAGS:--O2 -pipe}"
 export HOST_CXXFLAGS="${HOST_CXXFLAGS:--O2 -pipe}"
 
 # ---------------------------------------------------------------- flags -------
-_ffbuild_base_cflags="-I$FFBUILD_PREFIX/include -O2 -pipe -fPIC -DPIC -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fstack-clash-protection -pthread"
+# -fPIC/-DPIC are ELF concepts. On PE they are meaningless, and -DPIC is an
+# ABI switch for some libraries: fontconfig compiles its DllMain only when
+# PIC or DLL_EXPORT is defined, which collides with libmingwex's dllmain.o in
+# a static archive. Upstream's Windows images leave PIC off.
+_ffbuild_pic_flags="-fPIC -DPIC"
+[[ "$FFBUILD_TARGET_PRUNE" == mingw ]] && _ffbuild_pic_flags=""
+_ffbuild_base_cflags="-I$FFBUILD_PREFIX/include -O2 -pipe ${_ffbuild_pic_flags:+"$_ffbuild_pic_flags "}-D_FORTIFY_SOURCE=2 -fstack-protector-strong -fstack-clash-protection -pthread"
+unset _ffbuild_pic_flags
 _ffbuild_base_cxxflags="$_ffbuild_base_cflags"
-_ffbuild_base_ldflags="-L$FFBUILD_PREFIX/lib -O2 -pipe -fstack-protector-strong -fstack-clash-protection -Wl,-z,relro,-z,now -pthread -lm"
+# -z relro/-z now are ELF linker options; the mingw driver rejects them.
+_ffbuild_elf_ldflags="-Wl,-z,relro,-z,now"
+[[ "$FFBUILD_TARGET_PRUNE" == mingw ]] && _ffbuild_elf_ldflags=""
+_ffbuild_base_ldflags="-L$FFBUILD_PREFIX/lib -O2 -pipe -fstack-protector-strong -fstack-clash-protection ${_ffbuild_elf_ldflags:+"$_ffbuild_elf_ldflags "}-pthread -lm"
+unset _ffbuild_elf_ldflags
 _ffbuild_base_ldexeflags=""
 
 # ct-ng toolchain keeps upstream's static libgcc/libstdc++ linkage.
@@ -408,11 +496,19 @@ export STAGE_CXXFLAGS="-fvisibility=hidden -fno-semantic-interposition${FFBUILD_
 export STAGE_LDFLAGS="${FFBUILD_EXTRA_STAGE_LDFLAGS:-}"
 
 # --------------------------------------------------------- ffmpeg contract ----
-FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --arch=x86_64 --target-os=linux"
+FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --arch=$FFBUILD_TARGET_ARCH --target-os=$FFBUILD_TARGET_OS"
 [[ -n "$FFBUILD_CROSS_PREFIX" ]] && \
-    FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --cross-prefix=$FFBUILD_CROSS_PREFIX --arch=x86_64 --target-os=linux"
+    FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --cross-prefix=$FFBUILD_CROSS_PREFIX --arch=$FFBUILD_TARGET_ARCH --target-os=$FFBUILD_TARGET_OS"
 export FFBUILD_TARGET_FLAGS
-export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-x86_64-unknown-linux-gnu}"
+export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-$FFBUILD_TARGET_RUST}"
+
+# Wine serves as meson's exe_wrapper. Keep its prefix inside the build root:
+# the default ~/.wine would survive deleting the repository and is a user
+# directory we must not populate.
+if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
+    export WINEPREFIX="${WINEPREFIX:-$FFBUILD_ROOT/wineprefix}"
+    export WINEDEBUG="${WINEDEBUG:--all}"
+fi
 # FFmpeg's --extra-version suffix. Unset or empty keeps upstream's default
 # behaviour, i.e. the build date in YYYYMMDD form.
 export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
@@ -452,8 +548,12 @@ export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-$FFBUILD_REPO_ROOT/to
 export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-$FFBUILD_REPO_ROOT/toolchain/generated/cross.meson}"
 
 export PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
+# PKG_CONFIG_LIBDIR replaces the default search path; do not also export
+# PKG_CONFIG_PATH. Upstream sets only LIBDIR, and the duplicate PATH leaks the
+# target prefix into host tools: cargo build scripts (rav1e's libgit2-sys)
+# then link the Windows libz.a into a host binary.
 export PKG_CONFIG_LIBDIR="$FFBUILD_PREFIX/lib/pkgconfig:$FFBUILD_PREFIX/share/pkgconfig"
-export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
+unset PKG_CONFIG_PATH
 
 # Upstream's Docker layers copy $FFBUILD_PREFIX/share/aclocal into
 # /usr/share/aclocal (10-xorg-macros, 45-x11). Natively we simply advertise the
@@ -685,24 +785,42 @@ ffbuild_write_toolchain_files() {
         echo "ranlib = $(_ffbuild_meson_array "$RANLIB")"
         echo "strip = $(_ffbuild_meson_array "$STRIP")"
         echo "nm = $(_ffbuild_meson_array "$NM")"
+        if [[ -n "$FFBUILD_TARGET_WIN_TOOLS" ]]; then
+            echo "windres = $(_ffbuild_meson_array "${WINDRES:-${FFBUILD_CROSS_PREFIX}windres}")"
+            echo "dlltool = $(_ffbuild_meson_array "${DLLTOOL:-${FFBUILD_CROSS_PREFIX}dlltool}")"
+        fi
+        # meson executes target binaries for some feature probes (glib runs
+        # five of them), so a cross build for Windows needs an exe wrapper.
+        if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
+            echo "exe_wrapper = $(_ffbuild_meson_array wine)"
+        fi
         echo
         echo "[host_machine]"
-        echo "system = 'linux'"
-        echo "cpu_family = 'x86_64'"
-        echo "cpu = 'x86_64'"
+        echo "system = '$FFBUILD_TARGET_MESON_SYSTEM'"
+        echo "cpu_family = '$FFBUILD_TARGET_ARCH'"
+        echo "cpu = '$FFBUILD_TARGET_ARCH'"
         echo "endian = 'little'"
         # Do not set sys_root here: meson prefixes every pkg-config -I path
         # with it, which turns an absolute prefix path such as
         # $FFBUILD_PREFIX/include/freetype2 into <sysroot>$FFBUILD_PREFIX/... .
         # The cross compiler already searches its own sysroot for system
         # headers and libraries.
+        if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
+            echo
+            echo "[properties]"
+            echo "needs_exe_wrapper = true"
+            echo "have_c99_vsnprintf = true"
+            echo "have_c99_snprintf = true"
+            echo "va_val_copy = true"
+            echo "have_unix98_printf = true"
+        fi
     } > "$dir/cross.meson"
 
     {
         echo "# Generated by native/env.sh — do not edit."
-        echo "set(CMAKE_SYSTEM_NAME Linux)"
-        echo "set(CMAKE_SYSTEM_PROCESSOR x86_64)"
-        echo "set(CMAKE_SYSTEM_VERSION 4.18.20)"
+        echo "set(CMAKE_SYSTEM_NAME $FFBUILD_TARGET_CMAKE_SYSTEM)"
+        echo "set(CMAKE_SYSTEM_PROCESSOR $FFBUILD_TARGET_ARCH)"
+        echo "set(CMAKE_SYSTEM_VERSION $FFBUILD_TARGET_CMAKE_VERSION)"
         echo
         echo "set(CMAKE_C_COMPILER \"$CC\")"
         echo "set(CMAKE_CXX_COMPILER \"$CXX\")"
@@ -710,6 +828,9 @@ ffbuild_write_toolchain_files() {
         echo "set(CMAKE_RANLIB \"$RANLIB\")"
         echo "set(CMAKE_NM \"$NM\")"
         echo "set(CMAKE_STRIP \"$STRIP\")"
+        if [[ -n "$FFBUILD_TARGET_WIN_TOOLS" ]]; then
+            echo "set(CMAKE_RC_COMPILER \"${WINDRES:-${FFBUILD_CROSS_PREFIX}windres}\")"
+        fi
         echo
         if [[ -n "$FFBUILD_CMAKE_SYSROOT" ]]; then
             echo "set(CMAKE_SYSROOT \"$FFBUILD_CMAKE_SYSROOT\")"
@@ -741,6 +862,8 @@ build root     : $FFBUILD_ROOT
 prefix         : $FFBUILD_PREFIX
 destdir        : $FFBUILD_DESTDIR
 destprefix     : $FFBUILD_DESTPREFIX
+target         : $FFBUILD_TARGET (--arch=$FFBUILD_TARGET_ARCH --target-os=$FFBUILD_TARGET_OS)
+ctng root      : $FFBUILD_CTNG_ROOT
 toolchain mode : $FFBUILD_TOOLCHAIN_MODE
 compiler       : $FFBUILD_COMPILER ($CC / $CXX)
 --host triple  : $FFBUILD_TOOLCHAIN

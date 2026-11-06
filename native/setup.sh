@@ -12,6 +12,7 @@
 #   ./native/setup.sh --all           # include the optional upstream packages in the list
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
 #   ./native/setup.sh --with-ctng --force-ctng   # rebuild an existing toolchain
+#   ./native/setup.sh --with-ctng --ctng-target win64   # toolchain for another target
 #   ./native/setup.sh --install       # install the packages (default: print the command)
 #   ./native/setup.sh --no-install    # skip the package step entirely (managed externally)
 #   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
@@ -39,8 +40,9 @@ PRINT_PKGS_ALL=0
 ONLY_BUILDTOOLS=0
 NO_MANAGED_TOOLS=0
 WITH_TOOLS=""
-# Target baked into toolchain/ctng/ct-ng-config; other targets are not supported.
-CTNG_TRIPLE="x86_64-ffbuild-linux-gnu"
+# Target whose ctng toolchain is built and checked. The per-target details
+# (triple, config file, pruning style) come from native/targets.conf.
+CTNG_TARGET="${FFBUILD_TARGET:-linux64}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --all)        DO_ALL=1 ;;
     --with-ctng)  WITH_CTNG=1 ;;
     --force-ctng) FORCE_CTNG=1 ;;
+    --ctng-target) CTNG_TARGET="${2:?--ctng-target needs a value}"; shift ;;
     --install)    DO_INSTALL=1 ;;
     --no-install) NO_INSTALL=1 ;;
     --print-packages)     PRINT_PKGS=1 ;;
@@ -61,6 +64,10 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+# env.sh resolves the target from FFBUILD_TARGET. Export it before any package
+# list is assembled: a Windows target needs wine, a Linux one does not.
+export FFBUILD_TARGET="$CTNG_TARGET"
 
 # ---------------------------------------------------------------- sudo --------
 if [[ "$(id -u)" -eq 0 ]]; then
@@ -230,6 +237,7 @@ tool_hint() {
         xxd)        pkg_cmd xxd ;;
         curl)       pkg_cmd curl ;;
         wget)       pkg_cmd wget ;;
+        wine)       pkg_cmd wine ;;
         *)          echo "install it with your package manager (README §2.1)" ;;
     esac
 }
@@ -252,6 +260,18 @@ probe_version() {
 # Version comparison used by both --check and the install sections.
 version_ge() {  # $1 >= $2 (version sort)
     [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | sed -n '1p')" == "$2" ]]
+}
+
+# target_conf_field <target> <column> -> native/targets.conf 中的字段
+target_conf_field() {
+    local t="$1" c="$2"
+    [[ -r "$HERE/targets.conf" ]] || return 1
+    awk -F'|' -v t="$t" -v c="$c" '
+        /^[[:space:]]*#/ { next }
+        NF < 3 { next }
+        { v = $1; gsub(/^[ \t]+|[ \t]+$/, "", v);
+          if (v == t) { o = $c; gsub(/^[ \t]+|[ \t]+$/, "", o); print o; exit } }
+    ' "$HERE/targets.conf"
 }
 
 # --------------------------------------------------------------- packages -----
@@ -277,6 +297,12 @@ PKG_KEYS_CORE=(
     # 托管构建工具自建，但编它们要用 perl 核心模块
     perl_core
 )
+
+# Windows targets run target binaries during meson setup; wine is only needed
+# there, so it must not join the default Linux package set.
+if [[ "$(target_conf_field "$CTNG_TARGET" 11)" == 1 ]]; then
+    PKG_KEYS_CORE+=(wine)
+fi
 PKG_KEYS_EXTRA=(
     # 上游镜像有、当前默认图用不到；--all 时装上
     p7zip bsdtar xxd libxml2_tools mercurial
@@ -479,10 +505,25 @@ do_check() {
     fi
     if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
         if [[ -x "$FFBUILD_CTNG_ROOT/bin/$CTNG_TRIPLE-gcc" ]]; then
-            rt_ok "ctng toolchain        $FFBUILD_CTNG_ROOT"
+            rt_ok "ctng toolchain        $FFBUILD_TARGET: $FFBUILD_CTNG_ROOT"
+        elif [[ -x "$FFBUILD_BUILDTOOLS_PREFIX/ctng/bin/$CTNG_TRIPLE-gcc" ]]; then
+            # Toolchain built before the per-target layout existed. setup.sh
+            # moves it on the next --with-ctng run; a plain build would not.
+            rt_missing "ctng toolchain        $FFBUILD_TARGET: found in the legacy layout" \
+                       "run ./native/setup.sh --with-ctng --ctng-target $FFBUILD_TARGET to migrate it"
         else
-            rt_missing "ctng toolchain        $FFBUILD_CTNG_ROOT" \
-                       "run ./native/setup.sh --with-ctng"
+            rt_missing "ctng toolchain        $FFBUILD_TARGET: $FFBUILD_CTNG_ROOT" \
+                       "run ./native/setup.sh --with-ctng --ctng-target $FFBUILD_TARGET"
+        fi
+    fi
+    # wine is meson's exe_wrapper for Windows targets; without it the first
+    # meson stage fails while running a feature-probe binary.
+    if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
+        if command -v wine >/dev/null 2>&1; then
+            rt_ok "wine                  $(command -v wine)"
+        else
+            rt_missing "wine                  $FFBUILD_TARGET: meson exe_wrapper" \
+                       "$(pkg_cmd wine)"
         fi
     fi
     # 默认变体经 50-ffnvcodec 打开 --enable-cuda-llvm，configure 把 nvcc 默认成 clang，
@@ -788,6 +829,10 @@ if ! source "$HERE/env.sh"; then
     exit 2
 fi
 
+# The toolchain triple always comes from targets.conf: setup also builds the
+# toolchain in host mode, where env.sh leaves FFBUILD_TOOLCHAIN_TRIPLE unset.
+CTNG_TRIPLE="$FFBUILD_TARGET_CTNG_TRIPLE"
+
 if [[ -n "${FFBUILD_IGNORED_CARGO_HOME:-}${FFBUILD_IGNORED_RUSTUP_HOME:-}" ]]; then
     echo "note: ignoring CARGO_HOME/RUSTUP_HOME from the environment; build caches stay under $FFBUILD_BUILDTOOLS_PREFIX"
 fi
@@ -852,25 +897,56 @@ clone_retry() {  # <dest> <url> [git clone options...]
 # OpenMP objects behind and breaks shared-library links.
 ctng_prune_toolchain() {
     [[ -d "$FFBUILD_CTNG_ROOT/$CTNG_TRIPLE/sysroot" ]] || return 1
-    echo "== pruning shared libraries from $FFBUILD_CTNG_ROOT"
-    find "$FFBUILD_CTNG_ROOT" \( -type l \
-        -and -name '*.so' \
-        -and -not -ipath '*plugin*' \
-        -and -not -name 'libdl.*' \
-        -and -not -name 'libc.*' \
-        -and -not -name 'libm.*' \
-        -and -not -name 'libmvec.*' \
-        -and -not -name 'librt.*' \
-        -and -not -name 'libpthread.*' \
-        \) -delete
-    find "$FFBUILD_CTNG_ROOT" \( \
-        -name 'libdl.a' \
-        -or -name 'libc.a' \
-        -or -name 'libm.a' \
-        -or -name 'libmvec.a' \
-        -or -name 'librt.a' \
-        -or -name 'libpthread.a' \
-        \) -delete
+    echo "== pruning $FFBUILD_TARGET toolchain ($FFBUILD_TARGET_PRUNE): $FFBUILD_CTNG_ROOT"
+    case "$FFBUILD_TARGET_PRUNE" in
+    mingw)
+        # Upstream removes the MinGW runtime DLLs and their import libraries so
+        # that everything but the C runtime links statically.
+        find "$FFBUILD_CTNG_ROOT" \( -name '*.dll' -o -name '*.dll.a' \) -delete
+        ;;
+    *)
+        find "$FFBUILD_CTNG_ROOT" \( -type l \
+            -and -name '*.so' \
+            -and -not -ipath '*plugin*' \
+            -and -not -name 'libdl.*' \
+            -and -not -name 'libc.*' \
+            -and -not -name 'libm.*' \
+            -and -not -name 'libmvec.*' \
+            -and -not -name 'librt.*' \
+            -and -not -name 'libpthread.*' \
+            \) -delete
+        find "$FFBUILD_CTNG_ROOT" \( \
+            -name 'libdl.a' \
+            -or -name 'libc.a' \
+            -or -name 'libm.a' \
+            -or -name 'libmvec.a' \
+            -or -name 'librt.a' \
+            -or -name 'libpthread.a' \
+            \) -delete
+        ;;
+    esac
+}
+
+# Before per-target toolchains, the Linux toolchain lived in .buildtools/ctng
+# itself. Move it under <base>/<target> once and rename its state file, so an
+# existing toolchain is reused instead of rebuilt (40+ minutes).
+ctng_migrate_layout() {
+    local base="${FFBUILD_BUILDTOOLS_PREFIX}/ctng"
+    local old_state="$FFBUILD_BUILDTOOLS_PREFIX/state/ctng.done"
+    local new_state="$FFBUILD_BUILDTOOLS_PREFIX/state/ctng-$FFBUILD_TARGET.done"
+    [[ "$FFBUILD_CTNG_ROOT" == "$base/$FFBUILD_TARGET" ]] || return 0
+    if [[ -d "$base" && ! -L "$base" && -x "$base/bin/$CTNG_TRIPLE-gcc" ]]; then
+        local tmp="$base.migrate.$$"
+        echo "== migrating toolchain: $base -> $FFBUILD_CTNG_ROOT"
+        mv "$base" "$tmp" && mkdir -p "$base" && mv "$tmp" "$FFBUILD_CTNG_ROOT"
+    fi
+    if [[ -f "$old_state" && ! -e "$new_state" ]]; then
+        local key
+        key="$(cat "$old_state" 2>/dev/null || true)"
+        if [[ "${key##* }" == "$CTNG_TRIPLE" ]]; then
+            mv "$old_state" "$new_state"
+        fi
+    fi
 }
 
 # ------------------------------------------------------------ build tools -----
@@ -1283,17 +1359,63 @@ prepare_rust() {
     fi
 }
 
+# Cross-compiled Rust: the toolchain needs the target's prebuilt std, and
+# crates that do not export CC_<target> need a linker in cargo's config.
+prepare_rust_target() {
+    local want="$FFBUILD_RUST_TARGET" host="" cfg=""
+    [[ -n "$want" ]] || return 0
+    host="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')"
+    # Native builds already have their target; nothing to add.
+    if [[ -z "$host" || "$want" == "$host" ]]; then
+        return 0
+    fi
+    if ! command -v rustup >/dev/null 2>&1; then
+        echo "  WARNING: rustup not found; cannot add rust target $want" >&2
+        note_failure "rust (target $want)"
+        return 0
+    fi
+    if ! rustup target list --installed 2>/dev/null | grep -qx "$want"; then
+        echo "== adding rust target $want =="
+        rustup target add "$want" || { note_failure "rust (target $want)"; return 0; }
+    fi
+    if [[ -n "$FFBUILD_CROSS_PREFIX" ]]; then
+        cfg="$CARGO_HOME/config.toml"
+        mkdir -p "$CARGO_HOME"
+        if [[ -f "$cfg" ]]; then
+            sed -i '/^# >>> ffbuild cross target/,/^# <<< ffbuild cross target/d' "$cfg"
+        fi
+        {
+            echo "# >>> ffbuild cross target (generated by setup.sh)"
+            echo "[target.$want]"
+            echo "linker = \"${FFBUILD_CROSS_PREFIX}gcc\""
+            echo "ar = \"${FFBUILD_CROSS_PREFIX}gcc-ar\""
+            echo "# <<< ffbuild cross target"
+        } >> "$cfg"
+        echo "  cargo config: $cfg (target.$want)"
+    fi
+}
+
 prepare_rust
+prepare_rust_target
 
 # ---------------------------------------------------------------- ct-ng -------
 if [[ "$WITH_CTNG" -eq 1 ]]; then
     CTNG_REPO="https://github.com/crosstool-ng/crosstool-ng.git"
-    # toolchain/ctng/ct-ng-config was generated by this revision. Cloning master
+    # The per-target config was generated by this ct-ng revision. Cloning master
     # would break as soon as crosstool-ng changes a configuration symbol.
     CTNG_COMMIT="b1a94f65c5187d99037a4e2f57aefbdf995a9677"
-    CTNG_STATE="$FFBUILD_BUILDTOOLS_PREFIX/state/ctng.done"
+    CTNG_CONFIG="$FFBUILD_REPO_ROOT/toolchain/ctng/$FFBUILD_TARGET_CTNG_CONFIG"
+    CTNG_STATE="$FFBUILD_BUILDTOOLS_PREFIX/state/ctng-$FFBUILD_TARGET.done"
     CTNG_CC="$FFBUILD_CTNG_ROOT/bin/$CTNG_TRIPLE-gcc"
-    CTNG_KEY="$(sha256sum "$FFBUILD_REPO_ROOT/toolchain/ctng/ct-ng-config" | cut -d' ' -f1) $CTNG_COMMIT $CTNG_TRIPLE"
+    # Component tarballs are target-independent; keeping them outside the
+    # prefix also stops CT_RM_RF_PREFIX_DIR from deleting them on every rebuild.
+    CTNG_SOURCES="$FFBUILD_BUILDTOOLS_PREFIX/ctng/sources"
+    ctng_migrate_layout
+    if [[ ! -f "$CTNG_CONFIG" ]]; then
+        echo "setup.sh: missing toolchain config $CTNG_CONFIG" >&2
+        exit 1
+    fi
+    CTNG_KEY="$(sha256sum "$CTNG_CONFIG" | cut -d' ' -f1) $CTNG_COMMIT $CTNG_TRIPLE"
 
     if [[ "$FORCE_CTNG" -eq 0 && -f "$CTNG_STATE" &&
           "$(cat "$CTNG_STATE")" == "$CTNG_KEY" && -x "$CTNG_CC" ]]; then
@@ -1306,7 +1428,7 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
     else
         echo "== building crosstool-ng toolchain (this takes a long time) =="
         CTNG_SRC="$FFBUILD_ROOT/ctng-src"
-        mkdir -p "$FFBUILD_ROOT" "$FFBUILD_CTNG_ROOT/sources" "$(dirname "$CTNG_STATE")"
+        mkdir -p "$FFBUILD_ROOT" "$FFBUILD_CTNG_ROOT" "$CTNG_SOURCES" "$(dirname "$CTNG_STATE")"
         if [[ ! -d "$CTNG_SRC/.git" ]] ||
            ! git -C "$CTNG_SRC" cat-file -e "${CTNG_COMMIT}^{commit}" 2>/dev/null; then
             if ! ctng_fetch_source "$CTNG_SRC" "$CTNG_REPO" "$CTNG_COMMIT"; then
@@ -1326,11 +1448,12 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
             ./bootstrap
             ./configure --prefix="$FFBUILD_CTNG_ROOT" --enable-local
             make -j"$FFBUILD_JOBS"
-            cp "$FFBUILD_REPO_ROOT/toolchain/ctng/ct-ng-config" .config
+            cp "$CTNG_CONFIG" .config
             # ct-ng defaults to /opt for the install prefix and $HOME/src for
-            # component tarballs; keep both inside the repository instead.
+            # component tarballs; keep both inside the repository instead, and
+            # share the tarballs between targets.
             sed -i "s|^CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$FFBUILD_CTNG_ROOT\"|" .config
-            sed -i "s|^CT_LOCAL_TARBALLS_DIR=.*|CT_LOCAL_TARBALLS_DIR=\"$FFBUILD_CTNG_ROOT/sources\"|" .config
+            sed -i "s|^CT_LOCAL_TARBALLS_DIR=.*|CT_LOCAL_TARBALLS_DIR=\"$CTNG_SOURCES\"|" .config
             # ct-ng aborts when CC/CXX/CFLAGS/LD_LIBRARY_PATH are set: they
             # belong to the final build, not to the toolchain build. Upstream
             # runs ct-ng in a base image without them; drop the same variables
@@ -1352,7 +1475,7 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
         fi
         printf '%s\n' "$CTNG_KEY" > "$CTNG_STATE"
         echo "ct-ng toolchain installed under $FFBUILD_CTNG_ROOT"
-        echo "Enable it with: FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl"
+        echo "Enable it with: FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh $FFBUILD_TARGET gpl"
     fi
 fi
 
@@ -1365,4 +1488,4 @@ echo
 echo "== setup complete =="
 ffbuild_env_dump
 echo
-echo "Next: ./native/download.sh && ./build.sh linux64 gpl"
+echo "Next: ./native/download.sh && ./build.sh $FFBUILD_TARGET gpl"

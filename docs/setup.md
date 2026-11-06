@@ -48,7 +48,10 @@
 | `--with-tools=a,b` | 仅处理列出的托管构建工具（已构建的跳过） |
 | `--no-managed-tools` | 不构建托管构建工具，使用宿主提供的版本；当前仓库中已有的 `.buildtools/prefix/bin` 仍优先于 `PATH` |
 | `--with-ctng` | 额外构建 crosstool-ng 工具链（与 `FFBUILD_TOOLCHAIN_MODE=ctng` 配合使用）；已构建且配置未变时跳过 |
+| `--ctng-target <target>` | 选择工具链目标，默认 `linux64`；`win64` 需要 wine |
 | `--force-ctng` | 强制重建 crosstool-ng 工具链 |
+
+工具链按目标安装到 `.buildtools/ctng/<target>`，完成标记为 `.buildtools/state/ctng-<target>.done`。`--install` 在 `win64` 下会一并安装 wine；`--check` 在 `win64` 下把缺失的 wine 计为失败，例如 `FFBUILD_TOOLCHAIN_MODE=ctng ./native/setup.sh --check --ctng-target win64`。
 
 `-h` / `--help` 打印用法摘要（选项与上表一致，但不含说明列）。脚本头部的注释是该清单的权威来源。
 

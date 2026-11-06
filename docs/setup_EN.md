@@ -48,7 +48,10 @@ After installing packages or changing the configuration, run `./native/setup.sh 
 | `--with-tools=a,b` | process only the listed managed build tools (already-built ones are skipped) |
 | `--no-managed-tools` | do not build the managed build tools; use the host-provided versions, but an existing `.buildtools/prefix/bin` still precedes them on `PATH` |
 | `--with-ctng` | additionally build the crosstool-ng toolchain (used with `FFBUILD_TOOLCHAIN_MODE=ctng`); skipped when the existing toolchain matches the current configuration |
+| `--ctng-target <target>` | select the toolchain target, default `linux64`; `win64` requires wine |
 | `--force-ctng` | rebuild the crosstool-ng toolchain |
+
+The toolchain is installed per target under `.buildtools/ctng/<target>`, with `.buildtools/state/ctng-<target>.done` as the completion marker. With `win64`, `--install` also installs wine, and `--check` counts a missing wine as a failure; for example, `FFBUILD_TOOLCHAIN_MODE=ctng ./native/setup.sh --check --ctng-target win64`.
 
 `-h` / `--help` prints the usage summary (same options as the table above, without the description column). The comment block at the top of the script is the authoritative source for this list.
 
