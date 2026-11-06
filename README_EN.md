@@ -7,7 +7,7 @@
 
 A Docker-free fork of [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds): build FFmpeg and its dependencies directly on a Linux x86_64 host.
 
-The `linux64` and `win64` targets are supported. `win64` requires the crosstool-ng toolchain and wine.
+The `linux64`, `win64`, and `win32` targets are supported. Windows targets require the crosstool-ng toolchain and wine; `win32` additionally requires a wine build that can run 32-bit programs.
 
 ## Documentation
 
@@ -15,7 +15,7 @@ The `linux64` and `win64` targets are supported. `win64` requires the crosstool-
 |---|---|
 | [Setting up the build environment](docs/setup_EN.md) | prerequisites, distribution packages, all `setup.sh` options, `--check` output |
 | [Building](docs/build_EN.md) | compiler and toolchain modes, build controls, directory layout, source cache |
-| [Troubleshooting](docs/troubleshooting_EN.md) | C++23, LLVMgold, OCaml num, missing wine for win64, permission errors, weak dependencies |
+| [Troubleshooting](docs/troubleshooting_EN.md) | C++23, LLVMgold, OCaml num, missing wine for Windows targets, permission errors, weak dependencies |
 
 ## How to make a build
 
@@ -51,14 +51,17 @@ On success, the artifact is written to `artifacts/ffmpeg-<version>-<target>-<var
 Available targets:
 * `linux64` (x86_64 Linux)
 * `win64` (x86_64 Windows, ctng only)
-* ~~`win32` (x86 Windows)~~
+* `win32` (x86 Windows, ctng only)
 * ~~`linuxarm64` (arm64 (aarch64) Linux)~~
 
-`win64` requires wine and a matching crosstool-ng toolchain:
+`win64` and `win32` require wine and a matching crosstool-ng toolchain:
 
 ```bash
 ./native/setup.sh --install --with-ctng --ctng-target win64
 FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+
+./native/setup.sh --install --with-ctng --ctng-target win32
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
 ```
 
 ~~The linuxarm64 target will not build some dependencies due to lack of arm64 (aarch64) architecture support or cross-compiling restrictions.~~
@@ -89,7 +92,7 @@ FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh win64 gpl-shared 9.0   # build the win64
 ```
 
 > [!NOTE]
-> `host` (the default) probes `cc`, then `gcc`, then `clang`; `CXX` follows the same compiler family. `clang` / `gcc` only change the default binary names for the host toolchain. `ctng` uses a locally built crosstool-ng toolchain, stored per target under `.buildtools/ctng/<target>`. The initial linux64 build compiles glibc and GCC; win64 compiles mingw-w64 and GCC. Build the win64 toolchain with `./native/setup.sh --with-ctng --ctng-target win64`, and make sure wine is installed (`--install` installs it).  
+> `host` (the default) probes `cc`, then `gcc`, then `clang`; `CXX` follows the same compiler family. `clang` / `gcc` only change the default binary names for the host toolchain. `ctng` uses a locally built crosstool-ng toolchain, stored per target under `.buildtools/ctng/<target>`. The initial linux64 build compiles glibc and GCC; Windows targets compile mingw-w64 and GCC. Build a toolchain with `./native/setup.sh --with-ctng --ctng-target <target>`, and make sure wine is installed (`--install` installs it).  
 > `FFBUILD_CC` / `CC` (and `CXX`, `LD`, `AR`, …) override this selection, including versioned compilers such as `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`.  
 > Additional compiler flags can be supplied through `FFBUILD_EXTRA_CFLAGS` and `FFBUILD_EXTRA_LDFLAGS`.  
 > To inspect the resolved configuration, run `source native/env.sh && ffbuild_env_dump`.  
@@ -118,7 +121,7 @@ artifacts/                                        build artifacts
 > `.buildtools/ctng/<target>` holds the crosstool-ng toolchain for each target.
 
 > `FFBUILD_ROOT` must not contain a period (this breaks path handling in `libxcb`/`libglvnd`).  
-> linux64 artifacts match the host glibc; for a glibc 2.28 baseline, use `FFBUILD_TOOLCHAIN_MODE=ctng` (run `./native/setup.sh --with-ctng` first). win64 artifacts use the UCRT.
+> linux64 artifacts match the host glibc; for a glibc 2.28 baseline, use `FFBUILD_TOOLCHAIN_MODE=ctng` (run `./native/setup.sh --with-ctng` first). win64 and win32 artifacts use the UCRT.
 
 ## License
 

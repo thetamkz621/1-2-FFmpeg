@@ -68,6 +68,16 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 1. 优先使用发布分支的检出：将 `FFMPEG_REPO` 指向该分支的工作树，或不设置 `FFMPEG_REPO` 并使用对应的版本附加项。
 2. 必须使用该源码包时，跳过不兼容的阶段，例如 `FFBUILD_SKIP_STAGES=openapv`。被跳过的阶段同时从 FFmpeg 的 configure 参数中移除，产物不再包含对应功能。
 
+## win32 构建提示 wine 无法运行 32 位程序
+
+**症状**：`./build.sh win32 …` 在依赖构建前退出，提示 `wine cannot run 32-bit Windows binaries`。
+
+**原因**：只安装了 64 位 wine。meson 的交叉文件把 wine 作为 `exe_wrapper`，而 win32 的目标程序是 32 位 PE；加载失败会使首次特性探测中断。
+
+**处理**：安装 wine 的 32 位支持。`build.sh` 会在依赖构建前编译并运行一个最小 32 位程序，缺少该支持时立即退出。
+
+> 发行版通常把 32 位支持拆成独立包，或要求先启用 32 位架构；例如 Debian / Ubuntu 需要启用 `i386` 架构后安装 `wine32`。具体包名以发行版为准。
+
 ## win64 构建提示缺少 wine
 
 **症状**：`./build.sh win64 …` 在依赖构建前退出，提示 `target 'win64' needs wine`；未使用 ctng 时则提示需要 `FFBUILD_TOOLCHAIN_MODE=ctng`。
