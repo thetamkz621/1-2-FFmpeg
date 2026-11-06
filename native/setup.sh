@@ -41,7 +41,7 @@ ONLY_BUILDTOOLS=0
 NO_MANAGED_TOOLS=0
 WITH_TOOLS=""
 # Target whose ctng toolchain is built and checked. The per-target details
-# (triple, config file, pruning style) come from native/targets.conf.
+# (triple, config file, pruning style) come from native/targets/<target>.conf.
 CTNG_TARGET="${FFBUILD_TARGET:-linux64}"
 
 while [[ $# -gt 0 ]]; do
@@ -262,16 +262,17 @@ version_ge() {  # $1 >= $2 (version sort)
     [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | sed -n '1p')" == "$2" ]]
 }
 
-# target_conf_field <target> <column> -> native/targets.conf 中的字段
-target_conf_field() {
-    local t="$1" c="$2"
-    [[ -r "$HERE/targets.conf" ]] || return 1
-    awk -F'|' -v t="$t" -v c="$c" '
-        /^[[:space:]]*#/ { next }
-        NF < 3 { next }
-        { v = $1; gsub(/^[ \t]+|[ \t]+$/, "", v);
-          if (v == t) { o = $c; gsub(/^[ \t]+|[ \t]+$/, "", o); print o; exit } }
-    ' "$HERE/targets.conf"
+# target_conf_get <target> <variable> -> native/targets/<target>.conf 中的值
+# Runs in a subshell so the caller's environment is untouched.
+target_conf_get() {
+    local t="$1" v="$2" f="$HERE/targets/$1.conf"
+    [[ -r "$f" ]] || return 1
+    (
+        set +u
+        # shellcheck source=/dev/null
+        . "$f"
+        eval "printf '%s' \"\${$v:-}\""
+    )
 }
 
 # --------------------------------------------------------------- packages -----
@@ -300,7 +301,7 @@ PKG_KEYS_CORE=(
 
 # Windows targets run target binaries during meson setup; wine is only needed
 # there, so it must not join the default Linux package set.
-if [[ "$(target_conf_field "$CTNG_TARGET" 11)" == 1 ]]; then
+if [[ "$(target_conf_get "$CTNG_TARGET" FFBUILD_TARGET_WINE)" == 1 ]]; then
     PKG_KEYS_CORE+=(wine)
 fi
 PKG_KEYS_EXTRA=(
@@ -829,7 +830,7 @@ if ! source "$HERE/env.sh"; then
     exit 2
 fi
 
-# The toolchain triple always comes from targets.conf: setup also builds the
+# The toolchain triple always comes from the target file: setup also builds the
 # toolchain in host mode, where env.sh leaves FFBUILD_TOOLCHAIN_TRIPLE unset.
 CTNG_TRIPLE="$FFBUILD_TARGET_CTNG_TRIPLE"
 

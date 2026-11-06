@@ -8,7 +8,7 @@
 #
 # ---------------------------------------------------------------- contract ----
 # Target selection
-#   FFBUILD_TARGET         linux64 (default) | win64 | win32; see native/targets.conf
+#   FFBUILD_TARGET         linux64 (default) | win64 | win32; see native/targets/
 #                          (build.sh derives it from its first argument)
 #
 # Toolchain selection
@@ -72,57 +72,66 @@ if [[ -z "$FFBUILD_REPO_ROOT" || ! -d "$FFBUILD_REPO_ROOT/scripts.d" ]]; then
 fi
 
 # ---------------------------------------------------------------- target ------
-# Everything that differs between targets lives in native/targets.conf: FFmpeg's
-# --arch/--target-os, the Rust target, the ctng triple and config, the
-# meson/cmake descriptor contents and the toolchain pruning style. build.sh
-# exports TARGET before sourcing this file; setup.sh exports FFBUILD_TARGET.
+# Everything that differs between targets lives in native/targets/<target>.conf.
+# Each file is sourced directly; keys are the FFBUILD_TARGET_* variables below.
+# build.sh exports TARGET before sourcing this file; setup.sh exports
+# FFBUILD_TARGET.
+#
+#   FFBUILD_TARGET_ARCH          FFmpeg --arch, meson cpu, cmake processor
+#   FFBUILD_TARGET_OS            FFmpeg --target-os
+#   FFBUILD_TARGET_RUST          cargo --target
+#   FFBUILD_TARGET_CTNG_TRIPLE   GNU triple produced by crosstool-ng
+#   FFBUILD_TARGET_CTNG_CONFIG   complete ct-ng config under toolchain/ctng
+#   FFBUILD_TARGET_MESON_SYSTEM  cross.meson host_machine.system
+#   FFBUILD_TARGET_CMAKE_SYSTEM  toolchain.cmake CMAKE_SYSTEM_NAME
+#   FFBUILD_TARGET_CMAKE_VERSION toolchain.cmake CMAKE_SYSTEM_VERSION
+#   FFBUILD_TARGET_WIN_TOOLS     extra binutils exported without triple prefix
+#   FFBUILD_TARGET_WINE          1 when meson needs exe_wrapper = wine
+#   FFBUILD_TARGET_PRUNE         toolchain pruning style: elf | mingw
+#   FFBUILD_TARGET_CPU           optional FFmpeg --cpu
+#   FFBUILD_TARGET_ARCH_CFLAGS   optional CFLAGS for the target architecture
+#   FFBUILD_TARGET_EMULATOR      optional qemu binary used to run target programs
 FFBUILD_TARGET="${FFBUILD_TARGET:-${TARGET:-linux64}}"
 export FFBUILD_TARGET
-FFBUILD_TARGETS_CONF="$FFBUILD_REPO_ROOT/native/targets.conf"
-export FFBUILD_TARGETS_CONF
+FFBUILD_TARGETS_DIR="$FFBUILD_REPO_ROOT/native/targets"
+FFBUILD_TARGET_CONF="$FFBUILD_TARGETS_DIR/$FFBUILD_TARGET.conf"
+export FFBUILD_TARGETS_DIR FFBUILD_TARGET_CONF
 
-_ffbuild_target_row() {  # <target> -> matching row, or nothing
-    [[ -r "$FFBUILD_TARGETS_CONF" ]] || return 1
-    awk -F'|' -v t="$1" '
-        /^[[:space:]]*#/ { next }
-        NF < 3 { next }
-        { v = $1; gsub(/^[ \t]+|[ \t]+$/, "", v); if (v == t) { print; exit } }
-    ' "$FFBUILD_TARGETS_CONF"
-}
-
-_ffbuild_target_field() {  # <row> <column>
-    printf '%s\n' "$1" | awk -F'|' -v c="$2" '
-        { v = $c; gsub(/^[ \t]+|[ \t]+$/, "", v); print v }
-    '
-}
-
-_ffbuild_trow="$(_ffbuild_target_row "$FFBUILD_TARGET")"
-if [[ -z "$_ffbuild_trow" ]]; then
+if [[ ! -r "$FFBUILD_TARGET_CONF" ]]; then
     echo "native/env.sh: unknown target '$FFBUILD_TARGET'" >&2
-    echo "  known targets: $(awk -F'|' '/^[[:space:]]*[^#[:space:]]/ { gsub(/^[ \t]+|[ \t]+$/, "", $1); printf "%s ", $1 }' "$FFBUILD_TARGETS_CONF" 2>/dev/null)" >&2
+    echo "  known targets: $(cd "$FFBUILD_TARGETS_DIR" 2>/dev/null && \
+        printf '%s ' *.conf | sed 's/\.conf//g')" >&2
     return 1 2>/dev/null || exit 1
 fi
-FFBUILD_TARGET_ARCH="$(_ffbuild_target_field "$_ffbuild_trow" 2)"
+# shellcheck source=/dev/null
+source "$FFBUILD_TARGET_CONF"
+
+# Optional keys only; required ones are validated below.
+: "${FFBUILD_TARGET_WIN_TOOLS:=}"
+: "${FFBUILD_TARGET_WINE:=0}"
+: "${FFBUILD_TARGET_CPU:=}"
+: "${FFBUILD_TARGET_ARCH_CFLAGS:=}"
+: "${FFBUILD_TARGET_EMULATOR:=}"
+
+for _ffbuild_key in ARCH OS RUST CTNG_TRIPLE CTNG_CONFIG MESON_SYSTEM \
+                     CMAKE_SYSTEM CMAKE_VERSION PRUNE; do
+    _ffbuild_var="FFBUILD_TARGET_$_ffbuild_key"
+    if [[ -z "${!_ffbuild_var:-}" ]]; then
+        echo "native/env.sh: $FFBUILD_TARGET_CONF does not set $_ffbuild_var" >&2
+        return 1 2>/dev/null || exit 1
+    fi
+done
+unset _ffbuild_key _ffbuild_var
+
 # meson names the 32-bit x86 family "x86"; FFmpeg and cmake use "i686".
 FFBUILD_TARGET_MESON_CPU_FAMILY="$FFBUILD_TARGET_ARCH"
 [[ "$FFBUILD_TARGET_MESON_CPU_FAMILY" == i686 ]] && FFBUILD_TARGET_MESON_CPU_FAMILY=x86
-FFBUILD_TARGET_OS="$(_ffbuild_target_field "$_ffbuild_trow" 3)"
-FFBUILD_TARGET_RUST="$(_ffbuild_target_field "$_ffbuild_trow" 4)"
-FFBUILD_TARGET_CTNG_TRIPLE="$(_ffbuild_target_field "$_ffbuild_trow" 5)"
-FFBUILD_TARGET_CTNG_CONFIG="$(_ffbuild_target_field "$_ffbuild_trow" 6)"
-FFBUILD_TARGET_MESON_SYSTEM="$(_ffbuild_target_field "$_ffbuild_trow" 7)"
-FFBUILD_TARGET_CMAKE_SYSTEM="$(_ffbuild_target_field "$_ffbuild_trow" 8)"
-FFBUILD_TARGET_CMAKE_VERSION="$(_ffbuild_target_field "$_ffbuild_trow" 9)"
-FFBUILD_TARGET_WIN_TOOLS="$(_ffbuild_target_field "$_ffbuild_trow" 10)"
-[[ "$FFBUILD_TARGET_WIN_TOOLS" == "-" ]] && FFBUILD_TARGET_WIN_TOOLS=""
-FFBUILD_TARGET_WINE="$(_ffbuild_target_field "$_ffbuild_trow" 11)"
-FFBUILD_TARGET_PRUNE="$(_ffbuild_target_field "$_ffbuild_trow" 12)"
 export FFBUILD_TARGET_ARCH FFBUILD_TARGET_MESON_CPU_FAMILY FFBUILD_TARGET_OS FFBUILD_TARGET_RUST
 export FFBUILD_TARGET_CTNG_TRIPLE FFBUILD_TARGET_CTNG_CONFIG
 export FFBUILD_TARGET_MESON_SYSTEM FFBUILD_TARGET_CMAKE_SYSTEM
 export FFBUILD_TARGET_CMAKE_VERSION
 export FFBUILD_TARGET_WIN_TOOLS FFBUILD_TARGET_WINE FFBUILD_TARGET_PRUNE
-unset _ffbuild_trow
+export FFBUILD_TARGET_CPU FFBUILD_TARGET_ARCH_CFLAGS FFBUILD_TARGET_EMULATOR
 
 # Snapshot caller-supplied values *before* we install defaults, so that a plain
 # `CC=clang ./build.sh ...` is honoured as an override.
