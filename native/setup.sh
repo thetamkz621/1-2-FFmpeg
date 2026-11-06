@@ -238,6 +238,7 @@ tool_hint() {
         curl)       pkg_cmd curl ;;
         wget)       pkg_cmd wget ;;
         wine)       pkg_cmd wine ;;
+        qemu-*)     pkg_cmd qemu_user ;;
         *)          echo "install it with your package manager (README §2.1)" ;;
     esac
 }
@@ -303,6 +304,12 @@ PKG_KEYS_CORE=(
 # there, so it must not join the default Linux package set.
 if [[ "$(target_conf_get "$CTNG_TARGET" FFBUILD_TARGET_WINE)" == 1 ]]; then
     PKG_KEYS_CORE+=(wine)
+fi
+# Linux targets on another architecture are verified through qemu-user; the
+# build itself does not execute target programs, so this is a runtime tool
+# rather than a build dependency.
+if [[ -n "$(target_conf_get "$CTNG_TARGET" FFBUILD_TARGET_EMULATOR)" ]]; then
+    PKG_KEYS_CORE+=(qemu_user)
 fi
 PKG_KEYS_EXTRA=(
     # 上游镜像有、当前默认图用不到；--all 时装上
@@ -525,6 +532,16 @@ do_check() {
         else
             rt_missing "wine                  $FFBUILD_TARGET: meson exe_wrapper" \
                        "$(pkg_cmd wine)"
+        fi
+    fi
+    # qemu-user is only needed to run the resulting binaries, not to build
+    # them; report it without failing the check.
+    if [[ -n "$FFBUILD_TARGET_EMULATOR" ]]; then
+        if command -v "$FFBUILD_TARGET_EMULATOR" >/dev/null 2>&1; then
+            rt_ok "qemu                  $FFBUILD_TARGET: $(command -v "$FFBUILD_TARGET_EMULATOR")"
+        else
+            rt_missing "qemu                  $FFBUILD_TARGET: run artifacts" \
+                       "$(pkg_cmd qemu_user)" optional
         fi
     fi
     # 默认变体经 50-ffnvcodec 打开 --enable-cuda-llvm，configure 把 nvcc 默认成 clang，

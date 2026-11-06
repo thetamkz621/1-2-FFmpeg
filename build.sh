@@ -110,6 +110,14 @@ ffbuild_check_wine32() {
 case "$TARGET" in
 linux64)
     ;;
+linuxarm64)
+    # Only the ctng toolchain can produce aarch64 binaries here; the host
+    # compilers are Linux-only and target x86_64.
+    if [[ "$FFBUILD_TOOLCHAIN_MODE" != ctng ]]; then
+        echo "build.sh: target '$TARGET' requires FFBUILD_TOOLCHAIN_MODE=ctng" >&2
+        exit 2
+    fi
+    ;;
 win32|win64)
     # Only the ctng toolchain can produce Windows binaries here; the host
     # compilers are Linux-only.
@@ -127,7 +135,7 @@ win32|win64)
     [[ "$TARGET" == win32 ]] && { ffbuild_check_wine32 || exit 2; }
     ;;
 *)
-    echo "build.sh: unsupported target '$TARGET' (supported: linux64, win64, win32)" >&2
+    echo "build.sh: unsupported target '$TARGET' (supported: linux64, linuxarm64, win64, win32)" >&2
     exit 2
     ;;
 esac
