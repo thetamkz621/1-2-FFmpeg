@@ -14,6 +14,28 @@ Targets, variants, and addins are listed in the [README](../README_EN.md#targets
 
 Before building, `native/download.sh --needed <target> <variant>` runs automatically to fetch the required sources; set `FFBUILD_SKIP_DOWNLOAD=1` to skip this step (reusing the existing cache). `FFBUILD_FFMPEG_ONLY=1` also skips it.
 
+## Targets
+
+| Target | Toolchain | Notes |
+|---|---|---|
+| `linux64` | host `gcc` / `clang`, or `ctng` | native or same-architecture cross build |
+| `win64` | `ctng` only | requires wine; `build.sh` exits early without wine or ctng |
+
+```bash
+# linux64 with the host toolchain
+./build.sh linux64 gpl-shared 9.0
+
+# linux64 with crosstool-ng (glibc 2.28 baseline)
+./native/setup.sh --install --with-ctng
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl-shared 9.0
+
+# win64
+./native/setup.sh --install --with-ctng --ctng-target win64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+```
+
+The target is selected by the first argument to `build.sh`; when building a toolchain, pass the same target to `setup.sh --ctng-target`.
+
 ## Compiler and toolchain
 
 | Variable | Meaning |
@@ -21,12 +43,13 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 | `FFBUILD_TOOLCHAIN_MODE` | `host` (default; probes `cc` → `gcc` → `clang`) / `clang` / `gcc` / `ctng` |
 | `FFBUILD_CC` `FFBUILD_CXX` `FFBUILD_LD` `FFBUILD_AR` … | per-tool overrides (or use `CC=` / `CXX=`, among others) |
 | `FFBUILD_TOOLCHAIN_TRIPLE` | override the `--host` triple passed to each stage |
-| `FFBUILD_CTNG_ROOT` | crosstool-ng toolchain location, default `.buildtools/ctng` (unaffected by `FFBUILD_CLEAN`) |
+| `FFBUILD_CTNG_ROOT` | crosstool-ng toolchain location, default `.buildtools/ctng/<target>` (unaffected by `FFBUILD_CLEAN`) |
 
-`clang` / `gcc` only set the defaults for the host toolchain. `ctng` requires running `./native/setup.sh --with-ctng` first.
+`clang` / `gcc` only set the defaults for the host toolchain. `ctng` requires running `./native/setup.sh --with-ctng --ctng-target <target>` for that target first.
 
-> The ctng toolchain lives in `.buildtools/ctng`; the initial build compiles glibc and GCC and takes a while.  
-> Pruning runs before dependencies are built, so `soxr` and `vidstab` are compiled serially; host `gcc` and `clang` builds are unaffected.
+> The ctng toolchain lives in `.buildtools/ctng/<target>`; the initial linux64 build compiles glibc and GCC, while win64 compiles mingw-w64 and GCC.  
+> Pruning runs before dependencies are built, so `soxr` and `vidstab` are compiled serially; host `gcc` and `clang` builds are unaffected.  
+> meson stages for win64 run target binaries through wine; without wine, `build.sh` exits before any dependency is built.
 
 ## Compiler flags
 
@@ -53,6 +76,8 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 | `FFBUILD_BUILD_DATE=YYYYMMDD` | pin the date in the artifact name |
 | `FFBUILD_SKIP_STAGES=a,b` | skip the listed stages, separated by commas or spaces (for example, `rav1e` and `librsvg` when Rust is unavailable) |
 | `FFBUILD_EXTRA_VERSION=<str>` | passed to FFmpeg as `--extra-version`, default `YYYYMMDD`; affects `ffmpeg -version` output, not the artifact name |
+
+The build root is stamped with `<target>:<compiler>`. A host build and a ctng build, or linux64 and win64, cannot share one root; use a separate `FFBUILD_ROOT` or set `FFBUILD_CLEAN=1` when switching.
 
 ## FFmpeg source
 
@@ -94,7 +119,7 @@ source native/env.sh && ffbuild_env_dump
 | `ffbuild/state` | resume state |
 | `ffbuild/destdir` | per-stage `DESTDIR`, merged into `prefix` when the stage finishes |
 | `ffbuild/pkgroot` | packaging scratch directory |
-| `.buildtools/ctng` | crosstool-ng toolchain (`ctng` mode) |
+| `.buildtools/ctng/<target>` | crosstool-ng toolchain (`ctng` mode) |
 | `.buildtools/` | managed build tools, venv, Rust, opam |
 | `.cache/downloads/` | source cache |
 | `artifacts/` | build artifacts |
@@ -105,7 +130,8 @@ Artifact name:
 artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler-or-toolchain>-<date>.tar.xz
 ```
 
-> This field is `gcc` or `clang` for host builds, and `ctng` in ctng mode.
+> This field is `gcc` or `clang` for host builds, and `ctng` in ctng mode.  
+> win64 artifacts contain `bin/*.exe` and `bin/*.dll`, with import libraries under `lib/`; they use the UCRT and do not depend on libgcc, libstdc++, or winpthread DLLs.
 
 ## Cache and retries
 
