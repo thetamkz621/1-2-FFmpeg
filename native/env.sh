@@ -268,7 +268,22 @@ for _t in CC CXX; do
             _ffbuild_missing_drivers+=("$_t=$_v")
         else
             echo "native/env.sh: $_t='$_v' was not found in PATH" >&2
-            echo "  install it, set $_t, or pick FFBUILD_TOOLCHAIN_MODE=host|clang|gcc" >&2
+            if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
+                # The ctng toolchain is built by setup.sh, but setup.sh sources
+                # this file before reaching the build step. Running it with
+                # FFBUILD_TOOLCHAIN_MODE=ctng would therefore fail here, so the
+                # hint must point at the host-mode invocation.
+                if [[ -d "$FFBUILD_CTNG_ROOT/bin" ]]; then
+                    echo "  the ctng toolchain is incomplete: $FFBUILD_CTNG_ROOT/bin/$_v is missing" >&2
+                    echo "  rebuild it with: ./native/setup.sh --with-ctng --force-ctng" >&2
+                else
+                    echo "  the ctng toolchain has not been built in $FFBUILD_CTNG_ROOT" >&2
+                    echo "  build it with: ./native/setup.sh --with-ctng" >&2
+                    echo "  run that command without FFBUILD_TOOLCHAIN_MODE=ctng, then build again" >&2
+                fi
+            else
+                echo "  install it, set $_t, or pick FFBUILD_TOOLCHAIN_MODE=host|clang|gcc" >&2
+            fi
             return 1 2>/dev/null || exit 1
         fi
     fi
