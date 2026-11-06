@@ -19,6 +19,7 @@
 | 目标 | 工具链 | 说明 |
 |---|---|---|
 | `linux64` | host `gcc` / `clang`，或 `ctng` | 同架构原生或交叉构建 |
+| `linuxarm64` | 仅 `ctng` | 产物为 aarch64 ELF；运行需要 qemu-user，未使用 ctng 时 `build.sh` 直接退出 |
 | `win64` | 仅 `ctng` | 需要 wine；缺少 wine 或未使用 ctng 时 `build.sh` 直接退出 |
 | `win32` | 仅 `ctng` | 需要能运行 32 位程序的 wine；预检失败时 `build.sh` 直接退出 |
 
@@ -37,6 +38,10 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
 # win32
 ./native/setup.sh --install --with-ctng --ctng-target win32
 FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
+
+# linuxarm64
+./native/setup.sh --install --with-ctng --ctng-target linuxarm64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 ```
 
 目标由 `build.sh` 的第一个参数决定；构建工具链时用 `setup.sh --ctng-target` 指定同一个目标。
@@ -52,7 +57,7 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
 
 `clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先按目标运行 `./native/setup.sh --with-ctng --ctng-target <target>`。
 
-> ctng 工具链位于 `.buildtools/ctng/<target>`；linux64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC。  
+> ctng 工具链位于 `.buildtools/ctng/<target>`；linux64 与 linuxarm64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC。  
 > 裁剪在依赖构建前执行，因此 `soxr` 与 `vidstab` 按串行编译；宿主 `gcc` / `clang` 模式不受影响。  
 > Windows 目标的 meson 阶段通过 wine 运行目标程序；缺少 wine，或 `win32` 的 wine 缺少 32 位支持时，`build.sh` 在依赖构建前退出。
 

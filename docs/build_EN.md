@@ -19,6 +19,7 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 | Target | Toolchain | Notes |
 |---|---|---|
 | `linux64` | host `gcc` / `clang`, or `ctng` | native or same-architecture cross build |
+| `linuxarm64` | `ctng` only | produces aarch64 ELF; running it requires qemu-user; `build.sh` exits early without ctng |
 | `win64` | `ctng` only | requires wine; `build.sh` exits early without wine or ctng |
 | `win32` | `ctng` only | requires a wine build that can run 32-bit programs; `build.sh` exits early when the preflight check fails |
 
@@ -37,6 +38,10 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
 # win32
 ./native/setup.sh --install --with-ctng --ctng-target win32
 FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
+
+# linuxarm64
+./native/setup.sh --install --with-ctng --ctng-target linuxarm64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 ```
 
 The target is selected by the first argument to `build.sh`; when building a toolchain, pass the same target to `setup.sh --ctng-target`.

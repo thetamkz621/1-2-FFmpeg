@@ -78,6 +78,28 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 
 > 发行版通常把 32 位支持拆成独立包，或要求先启用 32 位架构；例如 Debian / Ubuntu 需要启用 `i386` 架构后安装 `wine32`。具体包名以发行版为准。
 
+## 无法在构建机上直接运行 linuxarm64 产物
+
+**症状**：直接执行 `bin/ffmpeg` 报 `Exec format error`，或提示找不到动态链接器。
+
+**原因**：产物是 aarch64 ELF，构建机通常是 x86_64；它依赖的目标 glibc 位于 ctng 的 sysroot 中，宿主链接器不适用。
+
+**处理**：通过 qemu-user 运行，并把 sysroot 交给它：
+
+```bash
+QEMU_LD_PREFIX=.buildtools/ctng/linuxarm64/aarch64-ffbuild-linux-gnu/sysroot \
+    qemu-aarch64 ./artifacts/.../bin/ffmpeg -version
+```
+
+共享变体还需要指向解包目录中的 `lib/`：
+
+```bash
+QEMU_LD_PREFIX=<sysroot> qemu-aarch64 -E LD_LIBRARY_PATH=<解包目录>/lib \
+    <解包目录>/bin/ffmpeg ...
+```
+
+> 静态变体不需要 `LD_LIBRARY_PATH`。`setup.sh --check` 缺少 `qemu-aarch64` 时只作提示，不影响构建。
+
 ## win64 构建提示缺少 wine
 
 **症状**：`./build.sh win64 …` 在依赖构建前退出，提示 `target 'win64' needs wine`；未使用 ctng 时则提示需要 `FFBUILD_TOOLCHAIN_MODE=ctng`。
