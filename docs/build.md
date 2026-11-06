@@ -20,6 +20,7 @@
 |---|---|---|
 | `linux64` | host `gcc` / `clang`，或 `ctng` | 同架构原生或交叉构建 |
 | `win64` | 仅 `ctng` | 需要 wine；缺少 wine 或未使用 ctng 时 `build.sh` 直接退出 |
+| `win32` | 仅 `ctng` | 需要能运行 32 位程序的 wine；预检失败时 `build.sh` 直接退出 |
 
 ```bash
 # linux64，宿主工具链
@@ -32,6 +33,10 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl-shared 9.0
 # win64
 ./native/setup.sh --install --with-ctng --ctng-target win64
 FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+
+# win32
+./native/setup.sh --install --with-ctng --ctng-target win32
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
 ```
 
 目标由 `build.sh` 的第一个参数决定；构建工具链时用 `setup.sh --ctng-target` 指定同一个目标。
@@ -47,9 +52,9 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
 
 `clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先按目标运行 `./native/setup.sh --with-ctng --ctng-target <target>`。
 
-> ctng 工具链位于 `.buildtools/ctng/<target>`；linux64 首次构建包含 glibc 与 GCC，win64 包含 mingw-w64 与 GCC。  
+> ctng 工具链位于 `.buildtools/ctng/<target>`；linux64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC。  
 > 裁剪在依赖构建前执行，因此 `soxr` 与 `vidstab` 按串行编译；宿主 `gcc` / `clang` 模式不受影响。  
-> win64 的 meson 阶段通过 wine 运行目标程序；缺少 wine 时 `build.sh` 在依赖构建前退出。
+> Windows 目标的 meson 阶段通过 wine 运行目标程序；缺少 wine，或 `win32` 的 wine 缺少 32 位支持时，`build.sh` 在依赖构建前退出。
 
 ## 编译参数
 
@@ -77,7 +82,7 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
 | `FFBUILD_SKIP_STAGES=a,b` | 跳过指定 stage，以逗号或空格分隔（例如缺少 Rust 时跳过 `rav1e` 与 `librsvg`） |
 | `FFBUILD_EXTRA_VERSION=<str>` | 传递给 FFmpeg 的 `--extra-version`，默认 `YYYYMMDD`；影响 `ffmpeg -version` 输出，不影响产物名称 |
 
-构建根使用 `<target>:<compiler>` 标记。host 与 ctng、linux64 与 win64 不能共用一个构建根；切换时使用独立的 `FFBUILD_ROOT`，或设置 `FFBUILD_CLEAN=1`。
+构建根使用 `<target>:<compiler>` 标记。host 与 ctng、以及不同目标之间不能共用一个构建根；切换时使用独立的 `FFBUILD_ROOT`，或设置 `FFBUILD_CLEAN=1`。
 
 ## FFmpeg 源码
 
@@ -131,7 +136,7 @@ artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器或工具链
 ```
 
 > 该字段在宿主 `gcc` / `clang` 模式下为 `gcc` / `clang`，在 `ctng` 模式下为 `ctng`。  
-> `win64` 产物为 `bin/*.exe` 与 `bin/*.dll`，导入库在 `lib/`；运行时依赖 UCRT，不依赖 libgcc、libstdc++ 或 winpthread 的 DLL。
+> Windows 目标的产物为 `bin/*.exe` 与 `bin/*.dll`，导入库在 `lib/`；运行时依赖 UCRT，不依赖 libgcc、libstdc++ 或 winpthread 的 DLL。
 
 ## 缓存与重试
 

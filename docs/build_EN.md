@@ -20,6 +20,7 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 |---|---|---|
 | `linux64` | host `gcc` / `clang`, or `ctng` | native or same-architecture cross build |
 | `win64` | `ctng` only | requires wine; `build.sh` exits early without wine or ctng |
+| `win32` | `ctng` only | requires a wine build that can run 32-bit programs; `build.sh` exits early when the preflight check fails |
 
 ```bash
 # linux64 with the host toolchain
@@ -32,6 +33,10 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl-shared 9.0
 # win64
 ./native/setup.sh --install --with-ctng --ctng-target win64
 FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+
+# win32
+./native/setup.sh --install --with-ctng --ctng-target win32
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
 ```
 
 The target is selected by the first argument to `build.sh`; when building a toolchain, pass the same target to `setup.sh --ctng-target`.
@@ -77,7 +82,7 @@ The target is selected by the first argument to `build.sh`; when building a tool
 | `FFBUILD_SKIP_STAGES=a,b` | skip the listed stages, separated by commas or spaces (for example, `rav1e` and `librsvg` when Rust is unavailable) |
 | `FFBUILD_EXTRA_VERSION=<str>` | passed to FFmpeg as `--extra-version`, default `YYYYMMDD`; affects `ffmpeg -version` output, not the artifact name |
 
-The build root is stamped with `<target>:<compiler>`. A host build and a ctng build, or linux64 and win64, cannot share one root; use a separate `FFBUILD_ROOT` or set `FFBUILD_CLEAN=1` when switching.
+The build root is stamped with `<target>:<compiler>`. A host build and a ctng build, or two different targets, cannot share one root; use a separate `FFBUILD_ROOT` or set `FFBUILD_CLEAN=1` when switching.
 
 ## FFmpeg source
 
@@ -131,7 +136,7 @@ artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler-or-toolchain>
 ```
 
 > This field is `gcc` or `clang` for host builds, and `ctng` in ctng mode.  
-> win64 artifacts contain `bin/*.exe` and `bin/*.dll`, with import libraries under `lib/`; they use the UCRT and do not depend on libgcc, libstdc++, or winpthread DLLs.
+> Windows artifacts contain `bin/*.exe` and `bin/*.dll`, with import libraries under `lib/`; they use the UCRT and do not depend on libgcc, libstdc++, or winpthread DLLs.
 
 ## Cache and retries
 

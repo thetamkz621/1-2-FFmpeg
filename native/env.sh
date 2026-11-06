@@ -8,7 +8,7 @@
 #
 # ---------------------------------------------------------------- contract ----
 # Target selection
-#   FFBUILD_TARGET         linux64 (default) | win64; see native/targets.conf
+#   FFBUILD_TARGET         linux64 (default) | win64 | win32; see native/targets.conf
 #                          (build.sh derives it from its first argument)
 #
 # Toolchain selection
@@ -103,6 +103,9 @@ if [[ -z "$_ffbuild_trow" ]]; then
     return 1 2>/dev/null || exit 1
 fi
 FFBUILD_TARGET_ARCH="$(_ffbuild_target_field "$_ffbuild_trow" 2)"
+# meson names the 32-bit x86 family "x86"; FFmpeg and cmake use "i686".
+FFBUILD_TARGET_MESON_CPU_FAMILY="$FFBUILD_TARGET_ARCH"
+[[ "$FFBUILD_TARGET_MESON_CPU_FAMILY" == i686 ]] && FFBUILD_TARGET_MESON_CPU_FAMILY=x86
 FFBUILD_TARGET_OS="$(_ffbuild_target_field "$_ffbuild_trow" 3)"
 FFBUILD_TARGET_RUST="$(_ffbuild_target_field "$_ffbuild_trow" 4)"
 FFBUILD_TARGET_CTNG_TRIPLE="$(_ffbuild_target_field "$_ffbuild_trow" 5)"
@@ -114,7 +117,7 @@ FFBUILD_TARGET_WIN_TOOLS="$(_ffbuild_target_field "$_ffbuild_trow" 10)"
 [[ "$FFBUILD_TARGET_WIN_TOOLS" == "-" ]] && FFBUILD_TARGET_WIN_TOOLS=""
 FFBUILD_TARGET_WINE="$(_ffbuild_target_field "$_ffbuild_trow" 11)"
 FFBUILD_TARGET_PRUNE="$(_ffbuild_target_field "$_ffbuild_trow" 12)"
-export FFBUILD_TARGET_ARCH FFBUILD_TARGET_OS FFBUILD_TARGET_RUST
+export FFBUILD_TARGET_ARCH FFBUILD_TARGET_MESON_CPU_FAMILY FFBUILD_TARGET_OS FFBUILD_TARGET_RUST
 export FFBUILD_TARGET_CTNG_TRIPLE FFBUILD_TARGET_CTNG_CONFIG
 export FFBUILD_TARGET_MESON_SYSTEM FFBUILD_TARGET_CMAKE_SYSTEM
 export FFBUILD_TARGET_CMAKE_VERSION
@@ -797,7 +800,7 @@ ffbuild_write_toolchain_files() {
         echo
         echo "[host_machine]"
         echo "system = '$FFBUILD_TARGET_MESON_SYSTEM'"
-        echo "cpu_family = '$FFBUILD_TARGET_ARCH'"
+        echo "cpu_family = '$FFBUILD_TARGET_MESON_CPU_FAMILY'"
         echo "cpu = '$FFBUILD_TARGET_ARCH'"
         echo "endian = 'little'"
         # Do not set sys_root here: meson prefixes every pkg-config -I path
