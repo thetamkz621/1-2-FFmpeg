@@ -79,6 +79,28 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 
 > Distributions usually split 32-bit support into a separate package or require the 32-bit architecture to be enabled first; for example, Debian and Ubuntu need the `i386` architecture enabled before `wine32` can be installed. Consult the distribution for the exact package names.
 
+## linuxarm64 artifacts do not run on the build machine
+
+**Symptoms**: running `bin/ffmpeg` directly fails with `Exec format error` or a missing dynamic loader.
+
+**Cause**: the artifact is an aarch64 ELF and the build machine is usually x86_64; the target glibc lives in the ctng sysroot and the host loader cannot use it.
+
+**Resolution**: run it through qemu-user and point the emulator at the sysroot:
+
+```bash
+QEMU_LD_PREFIX=.buildtools/ctng/linuxarm64/aarch64-ffbuild-linux-gnu/sysroot \
+    qemu-aarch64 ./artifacts/.../bin/ffmpeg -version
+```
+
+Shared variants also need the unpacked `lib/` directory:
+
+```bash
+QEMU_LD_PREFIX=<sysroot> qemu-aarch64 -E LD_LIBRARY_PATH=<unpacked>/lib \
+    <unpacked>/bin/ffmpeg ...
+```
+
+> Static variants do not need `LD_LIBRARY_PATH`. `setup.sh --check` only warns when `qemu-aarch64` is missing; the build itself is unaffected.
+
 ## win64 builds report a missing wine
 
 **Symptoms**: `./build.sh win64 …` exits before building any dependency with `target 'win64' needs wine`; without ctng it asks for `FFBUILD_TOOLCHAIN_MODE=ctng` instead.

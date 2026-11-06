@@ -48,10 +48,10 @@ After installing packages or changing the configuration, run `./native/setup.sh 
 | `--with-tools=a,b` | process only the listed managed build tools (already-built ones are skipped) |
 | `--no-managed-tools` | do not build the managed build tools; use the host-provided versions, but an existing `.buildtools/prefix/bin` still precedes them on `PATH` |
 | `--with-ctng` | additionally build the crosstool-ng toolchain (used with `FFBUILD_TOOLCHAIN_MODE=ctng`); skipped when the existing toolchain matches the current configuration |
-| `--ctng-target <target>` | select the toolchain target, default `linux64`; Windows targets require wine, and `win32` also requires 32-bit support |
+| `--ctng-target <target>` | select the toolchain target, default `linux64`; Windows targets require wine, `win32` also requires 32-bit support, and `linuxarm64` requires qemu-user to run the artifacts |
 | `--force-ctng` | rebuild the crosstool-ng toolchain |
 
-The toolchain is installed per target under `.buildtools/ctng/<target>`, with `.buildtools/state/ctng-<target>.done` as the completion marker. For Windows targets, `--install` also installs wine, and `--check` counts a missing wine as a failure; for example, `FFBUILD_TOOLCHAIN_MODE=ctng ./native/setup.sh --check --ctng-target win32`. `win32` additionally requires a wine build that can run 32-bit programs; `build.sh` verifies this when the build starts.
+The toolchain is installed per target under `.buildtools/ctng/<target>`, with `.buildtools/state/ctng-<target>.done` as the completion marker. For Windows targets, `--install` also installs wine, and `--check` counts a missing wine as a failure; for example, `FFBUILD_TOOLCHAIN_MODE=ctng ./native/setup.sh --check --ctng-target win32`. `win32` additionally requires a wine build that can run 32-bit programs; `build.sh` verifies this when the build starts. For `linuxarm64`, `--install` installs qemu-user; a missing emulator is only reported, because the build itself does not run target programs.
 
 `-h` / `--help` prints the usage summary (same options as the table above, without the description column). The comment block at the top of the script is the authoritative source for this list.
 
