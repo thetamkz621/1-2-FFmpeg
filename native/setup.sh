@@ -1488,4 +1488,4 @@ echo
 echo "== setup complete =="
 ffbuild_env_dump
 echo
-echo "Next: ./native/download.sh && ./build.sh linux64 gpl"
+echo "Next: ./native/download.sh && ./build.sh $FFBUILD_TARGET gpl"
