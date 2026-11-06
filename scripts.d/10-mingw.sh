@@ -12,23 +12,23 @@ ffbuild_enabled() {
     return 0
 }
 
-ffbuild_dockerlayer() {
-    to_df "COPY --link --from=${SELFLAYER} /opt/mingw/. /"
-    [[ -n "$COMBINING" ]] || return 0
-    to_df "COPY --link --from=${SELFLAYER} /opt/mingw/. /opt/mingw"
-}
-
-ffbuild_dockerfinal() {
-    to_df "COPY --link --from=${PREVLAYER} /opt/mingw/. /"
-}
-
 ffbuild_dockerdl() {
     echo "retry-tool sh -c \"rm -rf mingw && git clone '$SCRIPT_REPO' mingw\" && cd mingw && git checkout \"$SCRIPT_COMMIT\""
 }
 
+# Upstream builds these three parts into /opt/mingw and copies the result into
+# the container root. Natively there is no image layer to copy from: install
+# them straight into the compiler's sysroot, which is where later stages look
+# for headers and libraries. The sysroot lives inside the ctng toolchain
+# (.buildtools/ctng/<target>), so nothing is written outside the repository.
 ffbuild_dockerbuild() {
-    if [[ -z "$COMPILER_SYSROOT" ]]; then
-        COMPILER_SYSROOT="$(${CC} -print-sysroot)/usr/${FFBUILD_TOOLCHAIN}"
+    if [[ -z "${COMPILER_SYSROOT:-}" ]]; then
+        COMPILER_SYSROOT="$("$CC" -print-sysroot 2>/dev/null)/usr/${FFBUILD_TOOLCHAIN}"
+    fi
+    if [[ ! -d "$COMPILER_SYSROOT" ]]; then
+        echo "10-mingw: compiler sysroot '$COMPILER_SYSROOT' not found" >&2
+        echo "           a ctng toolchain is required for $TARGET" >&2
+        return 1
     fi
 
     unset CC CXX LD AR CPP LIBS CCAS
@@ -41,7 +41,15 @@ ffbuild_dockerbuild() {
     (
         cd mingw-w64-headers
 
+        # When the sysroot's include/ is a symlink, install into its target so
+        # the headers land in the real tree instead of beside the link.
+        local prefix="$COMPILER_SYSROOT"
+        if [[ -L "$COMPILER_SYSROOT/include" ]]; then
+            prefix="$(readlink -f "$COMPILER_SYSROOT/include")/.."
+        fi
+
         local myconf=(
+            --prefix="$prefix"
             --host="$FFBUILD_TOOLCHAIN"
             --with-default-win32-winnt="0x601"
             --with-default-msvcrt=ucrt
@@ -49,21 +57,10 @@ ffbuild_dockerbuild() {
             --enable-sdk=all
         )
 
-        if [[ -L "$COMPILER_SYSROOT"/include ]]; then
-            local target="$(readlink -f "$COMPILER_SYSROOT"/include)"
-            mkdir -p "/opt/mingw$COMPILER_SYSROOT"
-            ln -sfn "$(realpath -s --relative-to="$COMPILER_SYSROOT" "$target")" "/opt/mingw$COMPILER_SYSROOT/include"
-            myconf+=( --prefix="$(realpath "$target"/..)" )
-        else
-            myconf+=( --prefix="$COMPILER_SYSROOT" )
-        fi
-
         ./configure "${myconf[@]}"
-        make -j$(nproc)
-        make install DESTDIR="/opt/mingw"
+        make -j"$(nproc)"
+        make install
     )
-
-    cp -a /opt/mingw/. /
 
     ###
     ### mingw-w64-crt
@@ -108,11 +105,9 @@ ffbuild_dockerbuild() {
         esac
 
         ./configure "${myconf[@]}"
-        make -j$(nproc)
-        make install DESTDIR="/opt/mingw"
+        make -j"$(nproc)"
+        make install
     )
-
-    cp -a /opt/mingw/. /
 
     ###
     ### mingw-w64-libraries/winpthreads
@@ -129,8 +124,8 @@ ffbuild_dockerbuild() {
         )
 
         ./configure "${myconf[@]}"
-        make -j$(nproc)
-        make install DESTDIR="/opt/mingw"
+        make -j"$(nproc)"
+        make install
     )
 }
 
