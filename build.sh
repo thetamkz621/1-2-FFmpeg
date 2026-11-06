@@ -80,10 +80,29 @@ done
 # stages see the resolved compilers (including any override).
 ffbuild_write_toolchain_files
 
-if [[ "$TARGET" != linux64 ]]; then
-    echo "build.sh: this project supports the linux64 target only (got '$TARGET')." >&2
+case "$TARGET" in
+linux64)
+    ;;
+win64)
+    # Only the ctng toolchain can produce Windows binaries here; the host
+    # compilers are Linux-only.
+    if [[ "$FFBUILD_TOOLCHAIN_MODE" != ctng ]]; then
+        echo "build.sh: target '$TARGET' requires FFBUILD_TOOLCHAIN_MODE=ctng" >&2
+        exit 2
+    fi
+    # meson runs target binaries for feature probes; the cross file points at
+    # wine, so a missing wine shows up as a confusing meson error much later.
+    if ! command -v wine >/dev/null 2>&1; then
+        echo "build.sh: target '$TARGET' needs wine (used as meson's exe_wrapper)" >&2
+        echo "          install it, e.g. ./native/setup.sh --install --ctng-target $TARGET" >&2
+        exit 2
+    fi
+    ;;
+*)
+    echo "build.sh: unsupported target '$TARGET' (supported: linux64, win64)" >&2
     exit 2
-fi
+    ;;
+esac
 
 if [[ -n "${FFBUILD_CLEAN:-}" ]]; then
     echo "== cleaning $FFBUILD_ROOT =="
@@ -122,10 +141,18 @@ trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
 # A build root carries .done markers and static libraries built by one compiler;
 # reusing it with the other silently mixes object files. Record the compiler on
 # first use and refuse to continue on a mismatch (FFBUILD_CLEAN=1 wipes the root).
-_build_label="${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}}"
+# The stamp carries the target as well as the compiler: linux64 and win64 share
+# FFBUILD_ROOT by default, and their stage state is not interchangeable.
+_build_label="${FFBUILD_TARGET}:${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}}"
 if [[ -n "${FFBUILD_COMPILER:-}" ]]; then
     if [[ -f "$FFBUILD_ROOT/.compiler" ]]; then
-        _prev_compiler="$(cat "$FFBUILD_ROOT/.compiler" 2>/dev/null || true)"
+        _prev_raw="$(cat "$FFBUILD_ROOT/.compiler" 2>/dev/null || true)"
+        # Build roots written before targets existed hold a bare compiler label.
+        case "$_prev_raw" in
+            *:*) _prev_compiler="$_prev_raw" ;;
+            ?*)  _prev_compiler="linux64:$_prev_raw" ;;
+            *)   _prev_compiler="" ;;
+        esac
         if [[ -n "$_prev_compiler" && "$_prev_compiler" != "$_build_label" ]]; then
             echo "build.sh: $FFBUILD_ROOT was built with $_prev_compiler, now using $_build_label" >&2
             echo "          use FFBUILD_ROOT=... for a separate tree, or FFBUILD_CLEAN=1 to start over" >&2
@@ -134,7 +161,7 @@ if [[ -n "${FFBUILD_COMPILER:-}" ]]; then
     else
         printf '%s\n' "$_build_label" > "$FFBUILD_ROOT/.compiler"
     fi
-    unset _prev_compiler
+    unset _prev_compiler _prev_raw
 fi
 
 FFMPEG_REPO="${FFMPEG_REPO:-https://github.com/FFmpeg/FFmpeg.git}"
