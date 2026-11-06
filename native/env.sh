@@ -430,7 +430,14 @@ export HOST_CFLAGS="${HOST_CFLAGS:--O2 -pipe}"
 export HOST_CXXFLAGS="${HOST_CXXFLAGS:--O2 -pipe}"
 
 # ---------------------------------------------------------------- flags -------
-_ffbuild_base_cflags="-I$FFBUILD_PREFIX/include -O2 -pipe -fPIC -DPIC -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fstack-clash-protection -pthread"
+# -fPIC/-DPIC are ELF concepts. On PE they are meaningless, and -DPIC is an
+# ABI switch for some libraries: fontconfig compiles its DllMain only when
+# PIC or DLL_EXPORT is defined, which collides with libmingwex's dllmain.o in
+# a static archive. Upstream's Windows images leave PIC off.
+_ffbuild_pic_flags="-fPIC -DPIC"
+[[ "$FFBUILD_TARGET_PRUNE" == mingw ]] && _ffbuild_pic_flags=""
+_ffbuild_base_cflags="-I$FFBUILD_PREFIX/include -O2 -pipe ${_ffbuild_pic_flags:+"$_ffbuild_pic_flags "}-D_FORTIFY_SOURCE=2 -fstack-protector-strong -fstack-clash-protection -pthread"
+unset _ffbuild_pic_flags
 _ffbuild_base_cxxflags="$_ffbuild_base_cflags"
 # -z relro/-z now are ELF linker options; the mingw driver rejects them.
 _ffbuild_elf_ldflags="-Wl,-z,relro,-z,now"
