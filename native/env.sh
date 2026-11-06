@@ -541,8 +541,12 @@ export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-$FFBUILD_REPO_ROOT/to
 export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-$FFBUILD_REPO_ROOT/toolchain/generated/cross.meson}"
 
 export PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
+# PKG_CONFIG_LIBDIR replaces the default search path; do not also export
+# PKG_CONFIG_PATH. Upstream sets only LIBDIR, and the duplicate PATH leaks the
+# target prefix into host tools: cargo build scripts (rav1e's libgit2-sys)
+# then link the Windows libz.a into a host binary.
 export PKG_CONFIG_LIBDIR="$FFBUILD_PREFIX/lib/pkgconfig:$FFBUILD_PREFIX/share/pkgconfig"
-export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
+unset PKG_CONFIG_PATH
 
 # Upstream's Docker layers copy $FFBUILD_PREFIX/share/aclocal into
 # /usr/share/aclocal (10-xorg-macros, 45-x11). Natively we simply advertise the
