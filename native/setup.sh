@@ -242,6 +242,7 @@ tool_hint() {
         wget)       pkg_cmd wget ;;
         wine)       pkg_cmd wine ;;
         qemu-*)     pkg_cmd qemu_user ;;
+        file|bzip2|gzip) pkg_cmd ctng_host ;;
         *)          echo "install it with your package manager (README §2.1)" ;;
     esac
 }
@@ -313,6 +314,11 @@ fi
 # rather than a build dependency.
 if [[ -n "$(target_conf_get "$CTNG_TARGET" FFBUILD_TARGET_EMULATOR)" ]]; then
     PKG_KEYS_CORE+=(qemu_user)
+fi
+# ct-ng's own configure requires file, bzip2 and gzip; they are only needed
+# when the toolchain is built.
+if (( WITH_CTNG )); then
+    PKG_KEYS_CORE+=(ctng_host)
 fi
 PKG_KEYS_EXTRA=(
     # 上游镜像有、当前默认图用不到；--all 时装上
@@ -843,6 +849,15 @@ fi
 if [[ "$DO_CHECK" -eq 1 ]]; then
     export FFBUILD_ENV_CHECK_ONLY=1
 fi
+# Building the toolchain always uses the host compiler. A caller-supplied ctng
+# mode describes the later FFmpeg build and would make env.sh demand a
+# toolchain that does not exist yet.
+if [[ "$DO_CHECK" -eq 0 && "$WITH_CTNG" -eq 1 && "${FFBUILD_TOOLCHAIN_MODE:-}" == ctng ]]; then
+    echo "note: building the toolchain in host mode; FFBUILD_TOOLCHAIN_MODE applies to the FFmpeg build"
+    FFBUILD_TOOLCHAIN_MODE=host
+    export FFBUILD_TOOLCHAIN_MODE
+fi
+
 # shellcheck source=native/env.sh
 if ! source "$HERE/env.sh"; then
     echo "setup.sh: build environment is incomplete — install the packages listed above" >&2
@@ -1436,7 +1451,15 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
         echo "setup.sh: missing toolchain config $CTNG_CONFIG" >&2
         exit 1
     fi
-    CTNG_KEY="$(sha256sum "$CTNG_CONFIG" | cut -d' ' -f1) $CTNG_COMMIT $CTNG_TRIPLE"
+    # Bump CTNG_LOGIC_VERSION whenever the toolchain-building logic in this
+    # file changes (pruning, sed rewrites, build invocation): otherwise an
+    # existing toolchain would be considered current after a logic change.
+    CTNG_LOGIC_VERSION=1
+    CTNG_KEY="$(sha256sum "$CTNG_CONFIG" | cut -d' ' -f1) $CTNG_COMMIT $CTNG_TRIPLE $FFBUILD_TARGET_PRUNE $CTNG_LOGIC_VERSION"
+    CTNG_STALE=0
+    if [[ -f "$CTNG_STATE" && "$(cat "$CTNG_STATE")" != "$CTNG_KEY" ]]; then
+        CTNG_STALE=1
+    fi
 
     if [[ "$FORCE_CTNG" -eq 0 && -f "$CTNG_STATE" &&
           "$(cat "$CTNG_STATE")" == "$CTNG_KEY" && -x "$CTNG_CC" ]]; then
@@ -1449,6 +1472,11 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
     else
         echo "== building crosstool-ng toolchain (this takes a long time) =="
         CTNG_SRC="$FFBUILD_ROOT/ctng-src"
+        if [[ "$FORCE_CTNG" -eq 1 || "$CTNG_STALE" -eq 1 ]]; then
+            # A changed config or build procedure can leave objects that no
+            # longer match; start from a clean per-target tree.
+            rm -rf "$CTNG_SRC/build/$CTNG_TRIPLE"
+        fi
         mkdir -p "$FFBUILD_ROOT" "$FFBUILD_CTNG_ROOT" "$CTNG_SOURCES" "$(dirname "$CTNG_STATE")"
         if [[ ! -d "$CTNG_SRC/.git" ]] ||
            ! git -C "$CTNG_SRC" cat-file -e "${CTNG_COMMIT}^{commit}" 2>/dev/null; then
