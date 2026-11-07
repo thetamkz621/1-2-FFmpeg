@@ -1,26 +1,32 @@
-From: DeepSeek (via CodeBuddy CLI) <thetamkz621+ai@outlook.com>
+From: Rainist7heta <thetamkz621@outlook.com>
+Date: Mon, 19 Oct 2026 02:44:07 +0800
 Subject: [PATCH] soxr: derive the OpenMP runtime in soxr.pc from CMake
 
 libsoxr is built as a static library with -DWITH_OPENMP=ON, but soxr.pc.in
-has no Libs.private entry.  Upstream's stage appends a hard-coded "-lgomp"
-after installation, which is only correct when the objects were compiled by
-GCC (GOMP ABI).  Clang lowers OpenMP to the kmp ABI and needs libomp, so a
+has no Libs.private entry. The stage appends a hard-coded "-lgomp" after
+installation, which is only correct when the objects were compiled by GCC
+(GOMP ABI). clang lowers OpenMP to the kmp ABI and needs libomp, so a
 clang-built libsoxr fails to link with -lgomp.
 
 Let CMake decide: FindOpenMP records the runtime it used in OpenMP_C_LIB_NAMES
 and where it found it in OpenMP_C_LIBRARIES; put both into the template and
-drop the hard-coded value.  The names alone are not enough: FindOpenMP decides
-"found" by compiling and linking through the compiler *driver* with
--fopenmp, and the driver appends its own -L.  A distribution can therefore
-report OpenMP found while a bare -lomp does not resolve (Debian keeps
-libomp.so in /usr/lib/llvm-19/lib, outside the linker's default search path),
-so emit the -L entries too, ahead of the -l ones.  The .pc is only consumed on
-the build host, and it is not part of the packaged artifact.
+drop the hard-coded value. The names alone are not enough: FindOpenMP decides
+"found" by compiling and linking through the compiler driver with -fopenmp,
+and the driver appends its own -L. A distribution can therefore report OpenMP
+found while a bare -lomp does not resolve (Debian keeps libomp.so in
+/usr/lib/llvm-19/lib, outside the linker's default search path), so emit the
+-L entries too, ahead of the -l ones. The .pc is only consumed on the build
+host, and it is not part of the packaged artifact.
 
 When OpenMP was not found both parts stay empty, matching the serial objects.
 
+---
+ CMakeLists.txt | 24 ++++++++++++++++++++++++
+ src/soxr.pc.in |  1 +
+ 2 files changed, 25 insertions(+)
+
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index ee48f6c..70d09f4 100644
+index ee48f6c..35fe5cc 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -109,6 +109,30 @@ if (WITH_OPENMP)

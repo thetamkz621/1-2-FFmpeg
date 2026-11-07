@@ -1,3 +1,20 @@
+From: Rainist7heta <thetamkz621@outlook.com>
+Date: Fri, 16 Oct 2026 11:35:41 +0800
+Subject: [PATCH] davs2: make the endian check pass under clang
+
+The configure script rewrites its endian probe into
+`strings conftest.o | grep -q bss`, which assumes the compiler always emits a
+.bss section, even an empty one. clang omits empty sections, so the check
+aborts on a little-endian target.
+
+Look for .text and .data instead; both compilers emit them.
+
+---
+ build/linux/configure | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/build/linux/configure b/build/linux/configure
+index ac90f74..c67c6f9 100755
 --- a/build/linux/configure
 +++ b/build/linux/configure
 @@ -926,7 +926,10 @@
