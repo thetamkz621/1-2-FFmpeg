@@ -476,14 +476,25 @@ _ffbuild_pic_flags="-fPIC -DPIC"
 _ffbuild_arch_cflags=""
 [[ -n "$FFBUILD_CROSS_PREFIX" ]] && \
     _ffbuild_arch_cflags="${FFBUILD_TARGET_ARCH_CFLAGS:+"$FFBUILD_TARGET_ARCH_CFLAGS "}"
-_ffbuild_base_cflags="-I$FFBUILD_PREFIX/include -O2 -pipe ${_ffbuild_arch_cflags}${_ffbuild_pic_flags:+"$_ffbuild_pic_flags "}-D_FORTIFY_SOURCE=2 -fstack-protector-strong -fstack-clash-protection -pthread"
-unset _ffbuild_pic_flags _ffbuild_arch_cflags
+# -fstack-clash-protection, -pthread and -lm belong to the ELF/posix targets.
+# The upstream Windows images carry none of them: -pthread would pull
+# winpthreads into every dependency and change its threading backend.
+_ffbuild_clash=" -fstack-clash-protection"
+_ffbuild_pthread=" -pthread"
+_ffbuild_mathlib=" -lm"
+if [[ "$FFBUILD_TARGET_PRUNE" == mingw ]]; then
+    _ffbuild_clash=""
+    _ffbuild_pthread=""
+    _ffbuild_mathlib=""
+fi
+_ffbuild_base_cflags="-I$FFBUILD_PREFIX/include -O2 -pipe ${_ffbuild_arch_cflags}${_ffbuild_pic_flags:+"$_ffbuild_pic_flags "}-D_FORTIFY_SOURCE=2 -fstack-protector-strong${_ffbuild_clash}${_ffbuild_pthread}"
+unset _ffbuild_pic_flags
 _ffbuild_base_cxxflags="$_ffbuild_base_cflags"
 # -z relro/-z now are ELF linker options; the mingw driver rejects them.
 _ffbuild_elf_ldflags="-Wl,-z,relro,-z,now"
 [[ "$FFBUILD_TARGET_PRUNE" == mingw ]] && _ffbuild_elf_ldflags=""
-_ffbuild_base_ldflags="-L$FFBUILD_PREFIX/lib -O2 -pipe -fstack-protector-strong -fstack-clash-protection ${_ffbuild_elf_ldflags:+"$_ffbuild_elf_ldflags "}-pthread -lm"
-unset _ffbuild_elf_ldflags
+_ffbuild_base_ldflags="-L$FFBUILD_PREFIX/lib -O2 -pipe ${_ffbuild_arch_cflags}-fstack-protector-strong${_ffbuild_clash} ${_ffbuild_elf_ldflags:+"$_ffbuild_elf_ldflags "}${_ffbuild_pthread}${_ffbuild_mathlib}"
+unset _ffbuild_elf_ldflags _ffbuild_arch_cflags _ffbuild_clash _ffbuild_pthread _ffbuild_mathlib
 _ffbuild_base_ldexeflags=""
 
 # ct-ng toolchain keeps upstream's static libgcc/libstdc++ linkage.
@@ -531,8 +542,13 @@ export CXXFLAGS="$(_resolve_flags FFBUILD_CXXFLAGS "$_FFBUILD_ENV_SNAP_CXXFLAGS"
 export LDFLAGS="$(_resolve_flags FFBUILD_LDFLAGS   "$_FFBUILD_ENV_SNAP_LDFLAGS"   "$_ffbuild_base_ldflags"   FFBUILD_EXTRA_LDFLAGS)"
 export LDEXEFLAGS="$(_resolve_flags FFBUILD_LDEXEFLAGS "$_FFBUILD_ENV_SNAP_LDEXEFLAGS" "$_ffbuild_base_ldexeflags" FFBUILD_EXTRA_LDEXEFLAGS)"
 
-export STAGE_CFLAGS="-fvisibility=hidden -fno-semantic-interposition${FFBUILD_EXTRA_STAGE_CFLAGS:+ $FFBUILD_EXTRA_STAGE_CFLAGS}"
-export STAGE_CXXFLAGS="-fvisibility=hidden -fno-semantic-interposition${FFBUILD_EXTRA_STAGE_CXXFLAGS:+ $FFBUILD_EXTRA_STAGE_CXXFLAGS}"
+# Upstream's Windows images build stages with -fno-semantic-interposition only;
+# -fvisibility=hidden is part of the ELF recipe and changes PE export tables.
+_ffbuild_stage_vis="-fvisibility=hidden "
+[[ "$FFBUILD_TARGET_PRUNE" == mingw ]] && _ffbuild_stage_vis=""
+export STAGE_CFLAGS="${_ffbuild_stage_vis}-fno-semantic-interposition${FFBUILD_EXTRA_STAGE_CFLAGS:+ $FFBUILD_EXTRA_STAGE_CFLAGS}"
+export STAGE_CXXFLAGS="${_ffbuild_stage_vis}-fno-semantic-interposition${FFBUILD_EXTRA_STAGE_CXXFLAGS:+ $FFBUILD_EXTRA_STAGE_CXXFLAGS}"
+unset _ffbuild_stage_vis
 export STAGE_LDFLAGS="${FFBUILD_EXTRA_STAGE_LDFLAGS:-}"
 
 # --------------------------------------------------------- ffmpeg contract ----
@@ -841,10 +857,13 @@ ffbuild_write_toolchain_files() {
         echo "[binaries]"
         echo "c = $(_ffbuild_meson_array "$CC")"
         echo "cpp = $(_ffbuild_meson_array "$CXX")"
+        # Upstream lists ld for the Linux cross files and omits it for Windows;
+        # nm is never listed because meson derives it from the compiler.
+        [[ "$FFBUILD_TARGET_OS" != mingw32 ]] && \
+            echo "ld = $(_ffbuild_meson_array "$LD")"
         echo "ar = $(_ffbuild_meson_array "$AR")"
         echo "ranlib = $(_ffbuild_meson_array "$RANLIB")"
         echo "strip = $(_ffbuild_meson_array "$STRIP")"
-        echo "nm = $(_ffbuild_meson_array "$NM")"
         if [[ -n "$FFBUILD_TARGET_WIN_TOOLS" ]]; then
             echo "windres = $(_ffbuild_meson_array "${WINDRES:-${FFBUILD_CROSS_PREFIX}windres}")"
             echo "dlltool = $(_ffbuild_meson_array "${DLLTOOL:-${FFBUILD_CROSS_PREFIX}dlltool}")"
@@ -871,8 +890,12 @@ ffbuild_write_toolchain_files() {
             echo "needs_exe_wrapper = true"
             echo "have_c99_vsnprintf = true"
             echo "have_c99_snprintf = true"
-            echo "va_val_copy = true"
-            echo "have_unix98_printf = true"
+            # Upstream declares the unix98 result only for its cross Linux
+            # files; the Windows files stop after the two C99 checks. Leaving
+            # va_val_copy unset keeps meson from assuming a result it cannot
+            # verify here.
+            [[ "$FFBUILD_TARGET_OS" != mingw32 ]] && \
+                echo "have_unix98_printf = true"
         fi
     } > "$dir/cross.meson"
 
@@ -893,8 +916,14 @@ ffbuild_write_toolchain_files() {
         fi
         echo
         if [[ -n "$FFBUILD_CMAKE_SYSROOT" ]]; then
+            # Upstream searches the toolchain root as well as the sysroot and
+            # the dependency prefix; libgcc/libstdc++ live outside the sysroot.
+            _ffbuild_cmake_roots="\"$FFBUILD_CMAKE_SYSROOT\" \"$FFBUILD_PREFIX\""
+            [[ -n "$FFBUILD_CTNG_ROOT" ]] && \
+                _ffbuild_cmake_roots="\"$FFBUILD_CTNG_ROOT\" $_ffbuild_cmake_roots"
             echo "set(CMAKE_SYSROOT \"$FFBUILD_CMAKE_SYSROOT\")"
-            echo "list(APPEND CMAKE_FIND_ROOT_PATH \"$FFBUILD_CMAKE_SYSROOT\" \"$FFBUILD_PREFIX\")"
+            echo "list(APPEND CMAKE_FIND_ROOT_PATH $_ffbuild_cmake_roots)"
+            unset _ffbuild_cmake_roots
             echo "set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)"
             echo "set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)"
             echo "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)"
