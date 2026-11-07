@@ -13,6 +13,7 @@
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
 #   ./native/setup.sh --with-ctng --force-ctng   # rebuild an existing toolchain
 #   ./native/setup.sh --with-ctng --ctng-target win64   # toolchain for another target
+#   ./native/setup.sh --with-ctng --keep-ctng-src  # keep the ct-ng build tree (several GB)
 #   ./native/setup.sh --install       # install the packages (default: print the command)
 #   ./native/setup.sh --no-install    # skip the package step entirely (managed externally)
 #   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
@@ -33,6 +34,7 @@ DO_CHECK=0
 DO_ALL=0
 WITH_CTNG=0
 FORCE_CTNG=0
+KEEP_CTNG_SRC=0
 DO_INSTALL=0
 NO_INSTALL=0
 PRINT_PKGS=0
@@ -50,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     --all)        DO_ALL=1 ;;
     --with-ctng)  WITH_CTNG=1 ;;
     --force-ctng) FORCE_CTNG=1 ;;
+    --keep-ctng-src) KEEP_CTNG_SRC=1 ;;
     --ctng-target) CTNG_TARGET="${2:?--ctng-target needs a value}"; shift ;;
     --install)    DO_INSTALL=1 ;;
     --no-install) NO_INSTALL=1 ;;
@@ -1472,6 +1475,10 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
             # share the tarballs between targets.
             sed -i "s|^CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$FFBUILD_CTNG_ROOT\"|" .config
             sed -i "s|^CT_LOCAL_TARBALLS_DIR=.*|CT_LOCAL_TARBALLS_DIR=\"$CTNG_SOURCES\"|" .config
+            # Without CT_SAVE_TARBALLS ct-ng leaves downloads in build/tarballs
+            # and consumes anything already in the local dir; enabling it keeps
+            # one copy per component and lets every target reuse them.
+            sed -i 's|^# CT_SAVE_TARBALLS is not set|CT_SAVE_TARBALLS=y|' .config
             # ct-ng aborts when CC/CXX/CFLAGS/LD_LIBRARY_PATH are set: they
             # belong to the final build, not to the toolchain build. Upstream
             # runs ct-ng in a base image without them; drop the same variables
@@ -1481,6 +1488,16 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
             unset LD_LIBRARY_PATH LIBRARY_PATH LPATH
             unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH
             unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH PKG_CONFIG
+            # Prime the per-build tarball dir from the shared sources. The
+            # package iterator does not reliably consult CT_LOCAL_TARBALLS_DIR,
+            # but it always honours CT_TARBALLS_DIR, so symlinking here makes
+            # reuse independent of the fetch path.
+            mkdir -p "$CTNG_SRC/build/tarballs"
+            for _ctng_src in "$CTNG_SOURCES"/*; do
+                [[ -f "$_ctng_src" ]] || continue
+                ln -sf "$_ctng_src" "$CTNG_SRC/build/tarballs/$(basename "$_ctng_src")"
+            done
+            unset _ctng_src
             ./ct-ng build
         )
         ctng_prune_toolchain || {
@@ -1492,6 +1509,17 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
             exit 1
         fi
         printf '%s\n' "$CTNG_KEY" > "$CTNG_STATE"
+        # ct-ng writes its own log inside the source tree; keep a copy before
+        # the per-target build directory is removed.
+        mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/log"
+        cp "$CTNG_SRC/build.log" "$FFBUILD_BUILDTOOLS_PREFIX/log/ctng-$FFBUILD_TARGET.log" 2>/dev/null || true
+        if [[ "$KEEP_CTNG_SRC" -eq 0 ]]; then
+            # The component tarballs live in build/tarballs (shared, and now
+            # backed by the local sources dir); the per-target build tree is
+            # only needed until the toolchain is installed.
+            rm -rf "$CTNG_SRC/build/$CTNG_TRIPLE"
+            echo "removed the ct-ng build tree for $FFBUILD_TARGET (use --keep-ctng-src to keep it)"
+        fi
         echo "ct-ng toolchain installed under $FFBUILD_CTNG_ROOT"
         echo "Enable it with: FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh $FFBUILD_TARGET gpl"
     fi

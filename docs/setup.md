@@ -50,6 +50,7 @@
 | `--with-ctng` | 额外构建 crosstool-ng 工具链（与 `FFBUILD_TOOLCHAIN_MODE=ctng` 配合使用）；已构建且配置未变时跳过 |
 | `--ctng-target <target>` | 选择工具链目标，默认 `linux64`；Windows 目标需要 wine，`win32` 还要求 32 位支持，`linuxarm64` 需要 qemu-user 运行产物 |
 | `--force-ctng` | 强制重建 crosstool-ng 工具链 |
+| `--keep-ctng-src` | 保留 ct-ng 的按目标构建树（默认在安装完成后删除，可释放数 GB） |
 
 工具链按目标安装到 `.buildtools/ctng/<target>`，完成标记为 `.buildtools/state/ctng-<target>.done`。Windows 目标下 `--install` 会一并安装 wine，`--check` 把缺失的 wine 计为失败，例如 `FFBUILD_TOOLCHAIN_MODE=ctng ./native/setup.sh --check --ctng-target win32`。`win32` 还需要 wine 能运行 32 位程序，这一项在构建开始时由 `build.sh` 校验。`linuxarm64` 下 `--install` 会安装 qemu-user；`--check` 缺少它时只作提示，因为构建本身不运行目标程序。
 

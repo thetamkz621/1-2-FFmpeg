@@ -57,7 +57,7 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 
 `clang` / `gcc` 仅设置宿主工具链的默认值；`ctng` 需先按目标运行 `./native/setup.sh --with-ctng --ctng-target <target>`。
 
-> ctng 工具链位于 `.buildtools/ctng/<target>`；linux64 与 linuxarm64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC。  
+> ctng 工具链位于 `.buildtools/ctng/<target>`；linux64 与 linuxarm64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC。组件源码保存在 `.buildtools/ctng/sources` 并由各目标共用；每个目标的 ct-ng 构建树在安装完成后删除（`--keep-ctng-src` 可保留）。  
 > 裁剪在依赖构建前执行，因此 `soxr` 与 `vidstab` 按串行编译；宿主 `gcc` / `clang` 模式不受影响。  
 > Windows 目标的 meson 阶段通过 wine 运行目标程序；缺少 wine，或 `win32` 的 wine 缺少 32 位支持时，`build.sh` 在依赖构建前退出。
 
