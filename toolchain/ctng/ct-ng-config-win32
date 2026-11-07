@@ -1,4 +1,8 @@
 #
+# Source: BtbN/FFmpeg-Builds images/base-win32/ct-ng-config @ 1b6632de
+# Sync manually when bumping crosstool-NG or updating the upstream image.
+# Local change: CT_CC_GCC_SJLJ_EXCEPTIONS disabled (upstream cc8f0958).
+#
 # Automatically generated file; DO NOT EDIT.
 # crosstool-NG 1.29.0.7_b1a94f6 Configuration
 #
