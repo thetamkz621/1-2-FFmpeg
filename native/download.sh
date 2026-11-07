@@ -165,18 +165,33 @@ all_scripts() {
     done
 }
 
+# Per-script applicability. A directory stage can mix scripts that are enabled
+# for different targets, so the stage-level check (which only evaluates the last
+# script) is not precise enough for deciding what to download.
+script_enabled() {
+    local SCRIPT="$1"
+    (
+        SELF="$SCRIPT"
+        # shellcheck disable=SC1090
+        source "$SCRIPT" 2>/dev/null || exit 1
+        declare -F ffbuild_enabled >/dev/null || exit 0
+        ffbuild_enabled
+    )
+}
+
 # Only the scripts required by one target/variant, honouring ffbuild_enabled().
 needed_scripts() {
     # shellcheck source=util/vars.sh
-    source util/vars.sh "$NEEDED_TARGET" "$NEEDED_VARIANT" "${NEEDED_ADDINS[@]+"${NEEDED_ADDINS[@]}"}"
+    source util/vars.sh "$NEEDED_TARGET" "$NEEDED_VARIANT" "${NEEDED_ADDINS[@]+${NEEDED_ADDINS[@]}}"
     # shellcheck source=util/deps.sh
     source util/deps.sh
 
     local stage script
     for stage in $(get_build_order "$(ffbuild_entry_script)"); do
-        ffbuild_stage_enabled "$stage" || continue
         while IFS= read -r script; do
-            [[ -n "$script" ]] && printf '%s\n' "$script"
+            [[ -n "$script" ]] || continue
+            script_enabled "$script" || continue
+            printf '%s\n' "$script"
         done < <(ffbuild_stage_scripts "$stage")
     done
 }
