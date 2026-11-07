@@ -83,6 +83,7 @@ fi
 #   FFBUILD_TARGET_CTNG_TRIPLE   GNU triple produced by crosstool-ng
 #   FFBUILD_TARGET_CTNG_CONFIG   complete ct-ng config under toolchain/ctng
 #   FFBUILD_TARGET_MESON_SYSTEM  cross.meson host_machine.system
+#   FFBUILD_TARGET_ENDIAN        cross.meson host_machine.endian: little | big
 #   FFBUILD_TARGET_CMAKE_SYSTEM  toolchain.cmake CMAKE_SYSTEM_NAME
 #   FFBUILD_TARGET_CMAKE_VERSION toolchain.cmake CMAKE_SYSTEM_VERSION
 #   FFBUILD_TARGET_WIN_TOOLS     extra binutils exported without triple prefix
@@ -114,7 +115,7 @@ source "$FFBUILD_TARGET_CONF"
 : "${FFBUILD_TARGET_EMULATOR:=}"
 
 for _ffbuild_key in ARCH OS RUST CTNG_TRIPLE CTNG_CONFIG MESON_SYSTEM \
-                     CMAKE_SYSTEM CMAKE_VERSION PRUNE; do
+                     CMAKE_SYSTEM CMAKE_VERSION PRUNE ENDIAN; do
     _ffbuild_var="FFBUILD_TARGET_$_ffbuild_key"
     if [[ -z "${!_ffbuild_var:-}" ]]; then
         echo "native/env.sh: $FFBUILD_TARGET_CONF does not set $_ffbuild_var" >&2
@@ -122,6 +123,14 @@ for _ffbuild_key in ARCH OS RUST CTNG_TRIPLE CTNG_CONFIG MESON_SYSTEM \
     fi
 done
 unset _ffbuild_key _ffbuild_var
+
+case "$FFBUILD_TARGET_ENDIAN" in
+    little|big) ;;
+    *)
+        echo "native/env.sh: $FFBUILD_TARGET_CONF sets FFBUILD_TARGET_ENDIAN='$FFBUILD_TARGET_ENDIAN' (expected little or big)" >&2
+        return 1 2>/dev/null || exit 1
+        ;;
+esac
 
 # meson names the 32-bit x86 family "x86"; FFmpeg and cmake use "i686".
 FFBUILD_TARGET_MESON_CPU_FAMILY="$FFBUILD_TARGET_ARCH"
@@ -132,6 +141,7 @@ export FFBUILD_TARGET_MESON_SYSTEM FFBUILD_TARGET_CMAKE_SYSTEM
 export FFBUILD_TARGET_CMAKE_VERSION
 export FFBUILD_TARGET_WIN_TOOLS FFBUILD_TARGET_WINE FFBUILD_TARGET_PRUNE
 export FFBUILD_TARGET_CPU FFBUILD_TARGET_ARCH_CFLAGS FFBUILD_TARGET_EMULATOR
+export FFBUILD_TARGET_ENDIAN
 
 # Snapshot caller-supplied values *before* we install defaults, so that a plain
 # `CC=clang ./build.sh ...` is honoured as an override.
@@ -878,7 +888,7 @@ ffbuild_write_toolchain_files() {
         echo "system = '$FFBUILD_TARGET_MESON_SYSTEM'"
         echo "cpu_family = '$FFBUILD_TARGET_MESON_CPU_FAMILY'"
         echo "cpu = '$FFBUILD_TARGET_ARCH'"
-        echo "endian = 'little'"
+        echo "endian = '$FFBUILD_TARGET_ENDIAN'"
         # Do not set sys_root here: meson prefixes every pkg-config -I path
         # with it, which turns an absolute prefix path such as
         # $FFBUILD_PREFIX/include/freetype2 into <sysroot>$FFBUILD_PREFIX/... .
