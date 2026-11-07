@@ -70,7 +70,8 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 | `FFBUILD_EXTRA_STAGE_CFLAGS` / `FFBUILD_EXTRA_STAGE_CXXFLAGS` / `FFBUILD_EXTRA_STAGE_LDFLAGS` | 追加到各 stage 的参数 |
 | `FFBUILD_EXTRA_LIBS` | 追加到 FFmpeg 链接命令的库 |
 
-> `FFBUILD_CFLAGS` 等替换默认值时，默认值中的 `-I$FFBUILD_PREFIX/include` 也会被一并替换；如需追加选项，请使用 `FFBUILD_EXTRA_*`。
+> `FFBUILD_CFLAGS` 等替换默认值时，默认值中的 `-I$FFBUILD_PREFIX/include` 也会被一并替换；如需追加选项，请使用 `FFBUILD_EXTRA_*`。  
+> `ctng` 模式下 `FFBUILD_CC` / `CC`（以及 `CXX`）必须指向目标 triple 的驱动；指向宿主编译器时会在加载环境阶段直接报错。
 
 ## 构建控制
 

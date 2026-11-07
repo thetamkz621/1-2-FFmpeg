@@ -371,6 +371,28 @@ if ((${#_ffbuild_missing_drivers[@]})); then
 fi
 unset _t _v _ffbuild_missing_drivers
 
+# A compiler override applies in every mode, but under ctng it must target the
+# same triple as the toolchain. FFBUILD_CC=gcc-12 carried over from a host
+# build would otherwise replace the cross driver while the rest of the target
+# contract (sysroot, cross descriptors) still describes the cross target, and
+# the failure only surfaces much later inside a dependency build.
+if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
+    for _t in CC CXX; do
+        _snap="_FFBUILD_ENV_SNAP_$_t"
+        _ov="FFBUILD_$_t"
+        if [[ -n "${!_ov:-}" || -n "${!_snap:-}" ]]; then
+            _v="${!_t}"
+            _target="$("$_v" -dumpmachine 2>/dev/null || true)"
+            if [[ -n "$_target" && "$_target" != "$FFBUILD_TOOLCHAIN_TRIPLE" ]]; then
+                echo "native/env.sh: $_t='$_v' targets '$_target', but $FFBUILD_TARGET needs '$FFBUILD_TOOLCHAIN_TRIPLE'" >&2
+                echo "  unset FFBUILD_$_t/$_t for ctng builds, or point it at a driver for the target triple" >&2
+                return 1 2>/dev/null || exit 1
+            fi
+        fi
+    done
+    unset _t _v _snap _ov _target
+fi
+
 FFBUILD_COMPILER="$(_ffbuild_cc_kind "$CC")"
 export FFBUILD_COMPILER
 
