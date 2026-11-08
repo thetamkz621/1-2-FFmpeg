@@ -249,6 +249,17 @@ version_ge() {  # $1 >= $2 (version sort)
     [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | sed -n '1p')" == "$2" ]]
 }
 
+# cargo-c is a host tool, so probe the system OpenSSL rather than the FFmpeg
+# prefix. An empty result also covers a missing pkg-config or development files.
+system_openssl_version() {
+    local sys_pc="/usr/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
+    local triple
+    triple="$("${CC:-cc}" -dumpmachine 2>/dev/null || true)"
+    [[ -n "$triple" ]] && sys_pc="/usr/lib/$triple/pkgconfig:$sys_pc"
+    PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$sys_pc" \
+        pkg-config --modversion openssl 2>/dev/null || true
+}
+
 # --------------------------------------------------------------- packages -----
 # 装什么由 pkgdeps.conf 决定；这里只声明"默认图需要哪些能力"和"--all 额外给哪些"。
 # 默认图 = linux64 gpl；其余 target/variant 尚未全部跑通，上游镜像带的东西保持
@@ -643,17 +654,13 @@ int main(int argc, char **argv) {
         rt_ok "llvm bfd plugin       rust 静态库"
     fi
 
-    # cargo-c needs OpenSSL 3 *development* files, not the CLI: a host can have
-    # the openssl3 binary without any headers (Fedora's openssl-devel is
-    # separate). On EL8 the system tree stays at 1.1.1 and openssl3-devel
-    # installs a parallel one that setup points openssl-sys at.
-    ossl_ver="$(openssl version 2>/dev/null | awk '{print $2}')"
-    if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3" && [[ -f /usr/include/openssl/ssl.h ]]; then
-        rt_ok "OpenSSL >= 3 (dev)     cargo-c (found $ossl_ver)"
-    elif [[ -f /usr/include/openssl3/openssl/ssl.h ]]; then
-        rt_ok "OpenSSL 3 dev tree     cargo-c (/usr/include/openssl3, system $ossl_ver)"
+    # Prefer the system development files when they provide OpenSSL 3. Older
+    # hosts use cargo-c's vendored OpenSSL, so this is not a blocking prerequisite.
+    ossl_ver="$(system_openssl_version)"
+    if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3.0.0"; then
+        rt_ok "OpenSSL >= 3 (dev)     cargo-c (system $ossl_ver)"
     else
-        rt_missing "OpenSSL >= 3 (dev)     cargo-c" "$(tool_hint openssl3-devel)"
+        rt_ok "OpenSSL                 cargo-c (vendored fallback)"
     fi
     unset -f rt_ok rt_missing
     echo
@@ -1120,20 +1127,6 @@ prepare_rust() {
     mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
     # cargo-c's build must see *system* pkg-config files (e.g. openssl); the
     # prefix-only PKG_CONFIG_LIBDIR installed by native/env.sh would hide them.
-    #
-    # Its curl-sys dependency bundles a curl that requires OpenSSL >= 3.  EL8
-    # ships 1.1.1; EPEL's openssl3-devel installs a parallel tree, so point
-    # openssl-sys at it instead of failing with "OpenSSL 3.0.0 or greater".
-    if [[ "$(openssl version 2>/dev/null | awk '{print $2}' | cut -d. -f1)" -lt 3 ]]; then
-        if [[ -f /usr/include/openssl3/openssl/ssl.h ]]; then
-            export OPENSSL_INCLUDE_DIR=/usr/include/openssl3
-            export OPENSSL_LIB_DIR=/usr/lib64/openssl3
-            echo "  note: cargo-c will build against OpenSSL 3 (/usr/include/openssl3)"
-        else
-            echo "  WARNING: OpenSSL < 3 and openssl3-devel is missing; cargo-c may fail" >&2
-            echo "           install openssl3-devel (dnf) first; cargo-c needs OpenSSL 3" >&2
-        fi
-    fi
     # cargo-c is the only piece that has no distro package; everything else
     # (cargo, rustc) is reused from the host when it works.
     cargo_c_install() {
@@ -1149,10 +1142,18 @@ prepare_rust() {
             unset PKG_CONFIG_PATH
             export PKG_CONFIG_LIBDIR="$_sys_pc"
             unset _sys_pc _triple
+            # 系统没有 OpenSSL 3 开发文件时，使用 cargo-c 官方的 vendored 特性。
+            # 该特性让全部 Rust 原生依赖共用静态 OpenSSL，避免混用宿主并行版本。
+            _cargo_c_features=()
+            _ossl_ver="$(system_openssl_version)"
+            if [[ -z "$_ossl_ver" ]] || ! version_ge "$_ossl_ver" "3.0.0"; then
+                _cargo_c_features=(--features=vendored-openssl)
+                echo "  note: no system OpenSSL 3 development files; cargo-c will use vendored OpenSSL"
+            fi
             # 中间产物不放 TMPDIR（可能是 tmpfs）也不放 ~/.cargo：cargo-c 的构建很吃空间。
             mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/tmp" "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target"
             TMPDIR="$FFBUILD_BUILDTOOLS_PREFIX/tmp" \
-                cargo install --target-dir "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target" cargo-c
+                cargo install --target-dir "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target" cargo-c "${_cargo_c_features[@]}"
         )
     }
 
