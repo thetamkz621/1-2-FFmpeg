@@ -179,6 +179,15 @@ if [[ "$PKG_FLAVOR" == dnf-el8 ]] &&
    dnf -q repolist --all 2>/dev/null | awk '{print $1}' | grep -qx powertools; then
     DNF_REPO_ARGS=(--enablerepo=powertools)
 fi
+# 核心清单不依赖 EPEL：cargo-c 在系统 OpenSSL 过旧时改用 vendored 构建。
+# 只有 --all 的 p7zip、lcov 来自 EPEL，而新装 EL8 默认没有启用 EPEL，此时整条
+# dnf 事务会因找不到这两个包而失败。探测只看本地已启用仓库，不联网；探测失败
+# 按"未启用"处理——多执行一次 epel-release 安装是无害的 no-op。
+NEED_EPEL=0
+if [[ "$PKG_FLAVOR" == dnf-el8 ]] && (( PRINT_PKGS_ALL || DO_ALL )) &&
+   ! dnf -q repolist --enabled 2>/dev/null | awk '{print $1}' | grep -qx epel; then
+    NEED_EPEL=1
+fi
 # Fedora 默认安装弱依赖（Recommends）。ant 的 JDK 绑定会 Recommends 完整 JDK，完整
 # JDK 又 Recommends gtk3，再经 gdk-pixbuf2 → glycin → libheif → libheif-ffmpeg 拉进
 # ffmpeg-free 全家（实测 789 包 / 642 MiB，关掉后 481 包 / 473 MiB）。构建宿主只认
@@ -375,6 +384,17 @@ pkg_expand() {
     return 0
 }
 
+# pkg_plan <pkg...> -> 可整段粘贴的安装计划：EPEL 前置（EL8 的 --all 且未启用时）
+# 与主命令
+pkg_plan() {
+    (($#)) || return 0
+    if (( NEED_EPEL )); then
+        echo "# EL8 packages p7zip and lcov (--all extras) in EPEL, which is not enabled on this host:"
+        echo "dnf install -y epel-release"
+    fi
+    pkg_cmd_for "$@"
+}
+
 # pkg_cmd_for <pkg...> -> 一行可直接粘贴的安装命令
 pkg_cmd_for() {
     (($#)) || return 0
@@ -393,7 +413,7 @@ if [[ "$PRINT_PKGS" -eq 1 ]]; then
         echo "# no packages needed for $PKG_FLAVOR (${PKG_MGR:-unknown})"
         exit 0
     fi
-    pkg_cmd_for "${_print_pkgs[@]}"
+    pkg_plan "${_print_pkgs[@]}"
     exit 0
 fi
 
@@ -654,13 +674,18 @@ int main(int argc, char **argv) {
         rt_ok "llvm bfd plugin       rust 静态库"
     fi
 
-    # Prefer the system development files when they provide OpenSSL 3. Older
-    # hosts use cargo-c's vendored OpenSSL, so this is not a blocking prerequisite.
+    # cargo-c 优先使用系统的 OpenSSL 3 开发文件；系统没有时由 vendored 特性自建。
+    # 只有 cargo-c 实际可运行且不依赖系统 libssl 时才报 [ok]；否则报 [pending]，
+    # 表示它尚未按 vendored 方式构建。
     ossl_ver="$(system_openssl_version)"
     if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3.0.0"; then
         rt_ok "OpenSSL >= 3 (dev)     cargo-c (system $ossl_ver)"
+    elif command -v cargo-cinstall >/dev/null 2>&1 && cargo-cinstall --version >/dev/null 2>&1 &&
+         command -v ldd >/dev/null 2>&1 &&
+         ! ldd "$(command -v cargo-cinstall)" 2>/dev/null | grep -q libssl; then
+        rt_ok "OpenSSL                 cargo-c (vendored, static)"
     else
-        rt_ok "OpenSSL                 cargo-c (vendored fallback)"
+        printf '  %-10s %s\n' "[pending]" "OpenSSL                 cargo-c will build with vendored OpenSSL"
     fi
     unset -f rt_ok rt_missing
     echo
@@ -717,7 +742,7 @@ elif [[ "$DO_INSTALL" -ne 1 ]]; then
     echo "      install them yourself, or rerun with --install:"
     mapfile -t _hint_pkgs < <(pkg_expand)
     if ((${#_hint_pkgs[@]})); then
-        pkg_cmd_for "${_hint_pkgs[@]}" | sed 's/^/        /'
+        pkg_plan "${_hint_pkgs[@]}" | sed 's/^/        /'
     else
         echo "        (no column for $PKG_FLAVOR in pkgdeps.conf)"
     fi
@@ -738,6 +763,17 @@ if [[ "$INSTALL_OK" -eq 1 ]]; then
     fi
 fi
 
+# --all 的 p7zip、lcov 来自 EPEL，必须在可用性过滤之前装好 epel-release；否则
+# pkg_available 会把它们判成"发行版没有"直接丢掉。
+if [[ "$INSTALL_OK" -eq 1 ]] && (( NEED_EPEL )); then
+    echo "== enabling EPEL (EL8) =="
+    if ! asroot dnf install -y epel-release; then
+        echo "WARNING: epel-release could not be installed; p7zip and lcov will be missing." >&2
+        echo "         RHEL 8 without EPEL in its own repositories:" >&2
+        echo "         dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm" >&2
+    fi
+fi
+
 if [[ "$INSTALL_OK" -eq 1 ]]; then
     mapfile -t _want < <(pkg_expand)
     _keep=() _drop=() _unknown=()
@@ -752,6 +788,9 @@ if [[ "$INSTALL_OK" -eq 1 ]]; then
     done
     if ((${#_drop[@]})); then
         echo "note: not in the configured repositories, skipped: ${_drop[*]}"
+        if (( NEED_EPEL )) && [[ " ${_drop[*]} " == *" p7zip "* || " ${_drop[*]} " == *" lcov "* ]]; then
+            echo "      p7zip/lcov come from EPEL: install epel-release, then rerun"
+        fi
     fi
     if ((${#_unknown[@]})); then
         echo "note: repository metadata is not cached; ${#_unknown[@]} package(s) go to the package manager unchecked"

@@ -17,7 +17,7 @@
 |---|---|---|
 | apt | Debian 13、Ubuntu 22.04 / 24.04 / 26.04 | — |
 | dnf | Fedora 44 | — |
-| dnf（EL8） | Rocky Linux 8.10 | 安装时自动传入 `--enablerepo=powertools` |
+| dnf（EL8） | Rocky Linux 8.10 | 安装时自动传入 `--enablerepo=powertools`；cargo-c 使用 vendored OpenSSL |
 | pacman | Arch Linux | — |
 | zypper | openSUSE Leap 16 | — |
 
@@ -55,6 +55,8 @@
 
 `native/pkgdeps.conf` 是“能力 → 包名”的映射表：每行一个能力，按 apt / dnf / dnf-el8 / pacman / zypper 分为五列；`-` 表示该发行版没有对应软件包（例如 EL8 没有 `ocaml-num`）。
 
+EL8 不安装 OpenSSL 开发包：系统 OpenSSL 过旧时，cargo-c 通过自身的 `vendored-openssl` 特性静态编译一份 OpenSSL。`--all` 用到的 `p7zip`、`lcov` 只存在于 EPEL，未启用 EPEL 时 `--print-packages=all` 会先输出 `dnf install -y epel-release`，`--install --all` 自动完成该步骤。
+
 ## `--check` 输出说明
 
 ```
@@ -62,6 +64,7 @@
 [managed]  由 .buildtools/ 提供，不计为失败
 [MISSING]  缺失；通常下一行给出安装命令
 [absent]   可选工具；缺失不影响构建
+[pending]  尚未满足，但 setup 会自动完成（例如 cargo-c 以 vendored OpenSSL 构建）
 ```
 
 缺失项若属于托管构建工具，则不会给出安装命令，而是提示重新运行 `setup.sh`。

@@ -17,7 +17,7 @@ All artifacts remain inside the repository; sudo is used only to install distrib
 |---|---|---|
 | apt | Debian 13, Ubuntu 22.04 / 24.04 / 26.04 | — |
 | dnf | Fedora 44 | — |
-| dnf (EL8) | Rocky Linux 8.10 | passes `--enablerepo=powertools` when installing |
+| dnf (EL8) | Rocky Linux 8.10 | passes `--enablerepo=powertools` when installing; cargo-c uses vendored OpenSSL |
 | pacman | Arch Linux | — |
 | zypper | openSUSE Leap 16 | — |
 
@@ -55,6 +55,8 @@ After installing packages or changing the configuration, run `./native/setup.sh 
 
 `native/pkgdeps.conf` maps each capability to package names: one capability per line, with five columns for apt / dnf / dnf-el8 / pacman / zypper. `-` indicates that the distribution has no such package (for example, EL8 has no `ocaml-num`).
 
+EL8 installs no OpenSSL development package: when the system OpenSSL is too old, cargo-c builds a static copy through its `vendored-openssl` feature. The `--all` extras `p7zip` and `lcov` are available only from EPEL; when EPEL is not enabled, `--print-packages=all` prints an `dnf install -y epel-release` step first, and `--install --all` performs that step automatically.
+
 ## `--check` output
 
 ```
@@ -62,6 +64,7 @@ After installing packages or changing the configuration, run `./native/setup.sh 
 [managed]   provided by .buildtools/; not counted as a failure
 [MISSING]   missing; the following line usually gives the install command
 [absent]    optional tool; its absence does not affect the build
+[pending]   not yet satisfied; setup completes it automatically (for example, cargo-c is built with vendored OpenSSL)
 ```
 
 For a missing managed build tool, `[MISSING]` does not produce an install command; the output instead prompts you to rerun `setup.sh`.
