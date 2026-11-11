@@ -559,11 +559,6 @@ do_check() {
     if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
         if [[ -x "$FFBUILD_CTNG_ROOT/bin/$CTNG_TRIPLE-gcc" ]]; then
             rt_ok "ctng toolchain        $FFBUILD_TARGET: $FFBUILD_CTNG_ROOT"
-        elif [[ -x "$FFBUILD_BUILDTOOLS_PREFIX/ctng/bin/$CTNG_TRIPLE-gcc" ]]; then
-            # Toolchain built before the per-target layout existed. setup.sh
-            # moves it on the next --with-ctng run; a plain build would not.
-            rt_missing "ctng toolchain        $FFBUILD_TARGET: found in the legacy layout" \
-                       "run ./native/setup.sh --with-ctng --ctng-target $FFBUILD_TARGET to migrate it"
         else
             rt_missing "ctng toolchain        $FFBUILD_TARGET: $FFBUILD_CTNG_ROOT" \
                        "run ./native/setup.sh --with-ctng --ctng-target $FFBUILD_TARGET"
@@ -1023,28 +1018,6 @@ ctng_prune_toolchain() {
     esac
 }
 
-# Before per-target toolchains, the Linux toolchain lived in .buildtools/ctng
-# itself. Move it under <base>/<target> once and rename its state file, so an
-# existing toolchain is reused instead of rebuilt (40+ minutes).
-ctng_migrate_layout() {
-    local base="${FFBUILD_BUILDTOOLS_PREFIX}/ctng"
-    local old_state="$FFBUILD_BUILDTOOLS_PREFIX/state/ctng.done"
-    local new_state="$FFBUILD_BUILDTOOLS_PREFIX/state/ctng-$FFBUILD_TARGET.done"
-    [[ "$FFBUILD_CTNG_ROOT" == "$base/$FFBUILD_TARGET" ]] || return 0
-    if [[ -d "$base" && ! -L "$base" && -x "$base/bin/$CTNG_TRIPLE-gcc" ]]; then
-        local tmp="$base.migrate.$$"
-        echo "== migrating toolchain: $base -> $FFBUILD_CTNG_ROOT"
-        mv "$base" "$tmp" && mkdir -p "$base" && mv "$tmp" "$FFBUILD_CTNG_ROOT"
-    fi
-    if [[ -f "$old_state" && ! -e "$new_state" ]]; then
-        local key
-        key="$(cat "$old_state" 2>/dev/null || true)"
-        if [[ "${key##* }" == "$CTNG_TRIPLE" ]]; then
-            mv "$old_state" "$new_state"
-        fi
-    fi
-}
-
 # ------------------------------------------------------------ build tools -----
 # 构建工具全部源码自建：配方在 native/buildtools.d/，驱动在 native/buildtools.sh。
 # 装进 $FFBUILD_BUILDTOOLS_PREFIX/prefix，只放 bin/ 与 share/，不进 PKG_CONFIG_LIBDIR，
@@ -1500,7 +1473,6 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
     # Component tarballs are target-independent; keeping them outside the
     # prefix also stops CT_RM_RF_PREFIX_DIR from deleting them on every rebuild.
     CTNG_SOURCES="$FFBUILD_BUILDTOOLS_PREFIX/ctng/sources"
-    ctng_migrate_layout
     if [[ ! -f "$CTNG_CONFIG" ]]; then
         echo "setup.sh: missing toolchain config $CTNG_CONFIG" >&2
         exit 1
@@ -1591,10 +1563,11 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
             exit 1
         fi
         printf '%s\n' "$CTNG_KEY" > "$CTNG_STATE"
-        # ct-ng writes its own log inside the source tree; keep a copy before
-        # the per-target build directory is removed.
+        # ct-ng writes its own log into the shared source tree, where the next
+        # target would overwrite it; move it to the per-target log directory
+        # before the build tree is removed.
         mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/log"
-        cp "$CTNG_SRC/build.log" "$FFBUILD_BUILDTOOLS_PREFIX/log/ctng-$FFBUILD_TARGET.log" 2>/dev/null || true
+        mv "$CTNG_SRC/build.log" "$FFBUILD_BUILDTOOLS_PREFIX/log/ctng-$FFBUILD_TARGET.log" 2>/dev/null || true
         if [[ "$KEEP_CTNG_SRC" -eq 0 ]]; then
             # The component tarballs live in build/tarballs (shared, and now
             # backed by the local sources dir); the per-target build tree is
