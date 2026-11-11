@@ -1498,12 +1498,27 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
     else
         echo "== building crosstool-ng toolchain (this takes a long time) =="
         CTNG_SRC="$FFBUILD_ROOT/ctng-src"
+        mkdir -p "$FFBUILD_ROOT" "$FFBUILD_CTNG_ROOT" "$CTNG_SOURCES" "$(dirname "$CTNG_STATE")"
+        # Every target shares one ct-ng source tree: .config, the bootstrap and
+        # configure output, and build.log exist once. A second setup run would
+        # overwrite the first one's configuration and race in the same build
+        # tree, so refuse it instead of serialising an unsupported workflow.
+        CTNG_LOCK="$(dirname "$CTNG_STATE")/ctng-build.lock"
+        if command -v flock >/dev/null 2>&1; then
+            exec 9>"$CTNG_LOCK"
+            if ! flock -n 9; then
+                echo "setup.sh: another ct-ng build is running (lock: $CTNG_LOCK)" >&2
+                echo "           wait for it to finish, then run this command again" >&2
+                exit 1
+            fi
+        else
+            echo "note: flock is unavailable; concurrent ct-ng builds are not detected"
+        fi
         if [[ "$FORCE_CTNG" -eq 1 || "$CTNG_STALE" -eq 1 ]]; then
             # A changed config or build procedure can leave objects that no
             # longer match; start from a clean per-target tree.
             rm -rf "$CTNG_SRC/build/$CTNG_TRIPLE"
         fi
-        mkdir -p "$FFBUILD_ROOT" "$FFBUILD_CTNG_ROOT" "$CTNG_SOURCES" "$(dirname "$CTNG_STATE")"
         if [[ ! -d "$CTNG_SRC/.git" ]] ||
            ! git -C "$CTNG_SRC" cat-file -e "${CTNG_COMMIT}^{commit}" 2>/dev/null; then
             if ! ctng_fetch_source "$CTNG_SRC" "$CTNG_REPO" "$CTNG_COMMIT"; then
