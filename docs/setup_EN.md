@@ -62,7 +62,8 @@ EL8 installs no OpenSSL development package: when the system OpenSSL is too old,
 ```
 [ok]        ready
 [managed]   provided by .buildtools/; not counted as a failure
-[MISSING]   missing; the following line usually gives the install command
+[MISSING]   missing; the following line usually gives the install command, and the build cannot proceed
+[warn]      does not block the build; artifacts or optional capabilities may be affected
 [absent]    optional tool; its absence does not affect the build
 [pending]   not yet satisfied; setup completes it automatically (for example, cargo-c is built with vendored OpenSSL)
 ```
