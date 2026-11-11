@@ -1560,6 +1560,12 @@ if [[ "$WITH_CTNG" -eq 1 ]]; then
                 ln -sf "$_ctng_src" "$CTNG_SRC/build/tarballs/$(basename "$_ctng_src")"
             done
             unset _ctng_src
+            # ct-ng's frontend declares "build: .config", and a directory named
+            # build in the source tree satisfies that target. Creating
+            # build/tarballs above therefore makes make report the toolchain as
+            # up to date without running anything; make the prerequisite newer
+            # so the recipe actually runs.
+            touch .config
             ./ct-ng build
         )
         ctng_prune_toolchain || {
