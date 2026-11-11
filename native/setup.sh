@@ -69,7 +69,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # env.sh resolves the target from FFBUILD_TARGET. Export it before any package
-# list is assembled: a Windows target needs wine, a Linux one does not.
+# list is assembled: the target decides which packages and toolchain apply.
 export FFBUILD_TARGET="$CTNG_TARGET"
 
 # ---------------------------------------------------------------- sudo --------
@@ -249,7 +249,6 @@ tool_hint() {
         xxd)        pkg_cmd xxd ;;
         curl)       pkg_cmd curl ;;
         wget)       pkg_cmd wget ;;
-        wine)       pkg_cmd wine ;;
         qemu-*)     pkg_cmd qemu_user ;;
         file|bzip2|gzip) pkg_cmd ctng_host ;;
         *)          echo "install it with your package manager (README §2.1)" ;;
@@ -324,11 +323,6 @@ PKG_KEYS_CORE=(
     perl_core
 )
 
-# Windows targets run target binaries during meson setup; wine is only needed
-# there, so it must not join the default Linux package set.
-if [[ "$(target_conf_get "$CTNG_TARGET" FFBUILD_TARGET_WINE)" == 1 ]]; then
-    PKG_KEYS_CORE+=(wine)
-fi
 # Linux targets on another architecture are verified through qemu-user; the
 # build itself does not execute target programs, so this is a runtime tool
 # rather than a build dependency.
@@ -562,16 +556,6 @@ do_check() {
         else
             rt_missing "ctng toolchain        $FFBUILD_TARGET: $FFBUILD_CTNG_ROOT" \
                        "run ./native/setup.sh --with-ctng --ctng-target $FFBUILD_TARGET"
-        fi
-    fi
-    # wine is meson's exe_wrapper for Windows targets; without it the first
-    # meson stage fails while running a feature-probe binary.
-    if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
-        if command -v wine >/dev/null 2>&1; then
-            rt_ok "wine                  $(command -v wine)"
-        else
-            rt_missing "wine                  $FFBUILD_TARGET: meson exe_wrapper" \
-                       "$(pkg_cmd wine)"
         fi
     fi
     # qemu-user is only needed to run the resulting binaries, not to build
