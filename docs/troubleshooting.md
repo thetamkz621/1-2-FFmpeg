@@ -89,6 +89,46 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 1. 优先使用发布分支的检出：将 `FFMPEG_REPO` 指向该分支的工作树，或不设置 `FFMPEG_REPO` 并使用对应的版本附加项。
 2. 必须使用该源码包时，跳过不兼容的阶段，例如 `FFBUILD_SKIP_STAGES=openapv`。被跳过的阶段同时从 FFmpeg 的 configure 参数中移除，产物不再包含对应功能。
 
+## win32 构建提示 wine 无法运行 32 位程序
+
+**症状**：`./build.sh win32 …` 在依赖构建前退出，提示 `wine cannot run 32-bit Windows binaries`。
+
+**原因**：只安装了 64 位 wine。meson 的交叉文件把 wine 作为 `exe_wrapper`，而 win32 的目标程序是 32 位 PE；加载失败会使首次特性探测中断。
+
+**处理**：安装 wine 的 32 位支持。`build.sh` 会在依赖构建前编译并运行一个最小 32 位程序，缺少该支持时立即退出。
+
+> 发行版通常把 32 位支持拆成独立包，或要求先启用 32 位架构；例如 Debian / Ubuntu 需要启用 `i386` 架构后安装 `wine32`。具体包名以发行版为准。
+
+## 无法在构建机上直接运行 linuxarm64 产物
+
+**症状**：直接执行 `bin/ffmpeg` 报 `Exec format error`，或提示找不到动态链接器。
+
+**原因**：产物是 aarch64 ELF，构建机通常是 x86_64；它依赖的目标 glibc 位于 ctng 的 sysroot 中，宿主链接器不适用。
+
+**处理**：通过 qemu-user 运行，并把 sysroot 交给它：
+
+```bash
+QEMU_LD_PREFIX=.buildtools/ctng/linuxarm64/aarch64-ffbuild-linux-gnu/sysroot \
+    qemu-aarch64 ./artifacts/.../bin/ffmpeg -version
+```
+
+共享变体还需要指向解包目录中的 `lib/`：
+
+```bash
+QEMU_LD_PREFIX=<sysroot> qemu-aarch64 -E LD_LIBRARY_PATH=<解包目录>/lib \
+    <解包目录>/bin/ffmpeg ...
+```
+
+> 静态变体不需要 `LD_LIBRARY_PATH`。`setup.sh --check` 缺少 `qemu-aarch64` 时只作提示，不影响构建。
+
+## win64 构建提示缺少 wine
+
+**症状**：`./build.sh win64 …` 在依赖构建前退出，提示 `target 'win64' needs wine`；未使用 ctng 时则提示需要 `FFBUILD_TOOLCHAIN_MODE=ctng`。
+
+**原因**：win64 只能由 crosstool-ng 工具链生成；meson 的交叉文件把 wine 作为 `exe_wrapper`，配置阶段需要运行目标程序（例如 glib 的特性探测）。
+
+**处理**：运行 `./native/setup.sh --install --with-ctng --ctng-target win64`，它会安装 wine 并构建 win64 工具链；随后使用 `FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 …`。wine 也可以由发行版包管理器单独安装。
+
 ## 权限错误
 
 **症状**：出现 `Permission denied`；或构建工具的 configure 阶段报 `C compiler cannot create executables`（例如 `m4`）。

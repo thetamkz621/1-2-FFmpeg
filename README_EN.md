@@ -7,7 +7,7 @@
 
 A Docker-free fork of [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds): build FFmpeg and its dependencies directly on a Linux x86_64 host.
 
-Currently, only the `linux64` target is supported. Upstream's other targets remain present but are untested.
+The `linux64`, `linuxarm64`, `win64`, and `win32` targets are supported. `linuxarm64` and Windows targets require the crosstool-ng toolchain; Windows targets also require wine, and `win32` requires a wine build that can run 32-bit programs.
 
 ## Documentation
 
@@ -15,7 +15,7 @@ Currently, only the `linux64` target is supported. Upstream's other targets rema
 |---|---|
 | [Setting up the build environment](docs/setup_EN.md) | prerequisites, distribution packages, all `setup.sh` options, `--check` output |
 | [Building](docs/build_EN.md) | compiler and toolchain modes, build controls, directory layout, source cache |
-| [Troubleshooting](docs/troubleshooting_EN.md) | C++23, LLVMgold, OCaml num, permission errors, weak dependencies |
+| [Troubleshooting](docs/troubleshooting_EN.md) | C++23, LLVMgold, OCaml num, missing wine for Windows targets, permission errors, weak dependencies |
 
 ## How to make a build
 
@@ -44,20 +44,34 @@ An x86_64 Linux host is required. `setup.sh` handles distribution packages (by d
 ./build.sh linux64 gpl      # fetch the sources and build
 ```
 
-On success, the artifact is written to `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler>-<date>.tar.xz`.
+On success, the artifact is written to `artifacts/` as `ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler-or-toolchain>-<date>`; Windows targets use `.zip`, all other targets use `.tar.xz`.
 
 ### Targets, Variants and Addins
 
 Available targets:
-* ~~`win64` (x86_64 Windows)~~
-* ~~`win32` (x86 Windows)~~
 * `linux64` (x86_64 Linux)
-* ~~`linuxarm64` (arm64 (aarch64) Linux)~~
+* `linuxarm64` (arm64 (aarch64) Linux, ctng only, glibc 2.28)
+* `win64` (x86_64 Windows, ctng only)
+* `win32` (x86 Windows, ctng only)
 
-~~The linuxarm64 target will not build some dependencies due to lack of arm64 (aarch64) architecture support or cross-compiling restrictions.~~
+`win64` and `win32` require wine and a matching crosstool-ng toolchain:
 
-* ~~`davs2` and `xavs2`: aarch64 support is broken.~~
-* ~~`libmfx` and `libva`: Library for Intel QSV, so there is no aarch64 support.~~
+```bash
+./native/setup.sh --install --with-ctng --ctng-target win64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+
+./native/setup.sh --install --with-ctng --ctng-target win32
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
+```
+
+`linuxarm64` requires its own crosstool-ng toolchain; the resulting binaries run through qemu-user:
+
+```bash
+./native/setup.sh --install --with-ctng --ctng-target linuxarm64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
+```
+
+`linuxarm64` skips `davs2` and `xavs2` (no aarch64 support) and `libvpl` (Intel QSV).
 
 Available variants:
 * `gpl` Includes all dependencies, even those that require full GPL instead of just LGPL.
@@ -77,11 +91,12 @@ All of those can be optionally combined with any combination of addins:
 ```bash
 FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
 FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
-FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng toolchain (untested)
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng toolchain
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh win64 gpl-shared 9.0   # build the win64 toolchain first
 ```
 
 > [!NOTE]
-> `host` (the default) probes `cc`, then `gcc`, then `clang`; `CXX` follows the same compiler family. `clang` / `gcc` only change the default binary names for the host toolchain. `ctng` uses a locally built crosstool-ng toolchain (**currently untested**) and requires running `./native/setup.sh --with-ctng` first.  
+> `host` (the default) probes `cc`, then `gcc`, then `clang`; `CXX` follows the same compiler family. `clang` / `gcc` only change the default binary names for the host toolchain. `ctng` uses a locally built crosstool-ng toolchain, stored per target under `.buildtools/ctng/<target>`. The initial linux64 and linuxarm64 builds compile glibc and GCC; Windows targets compile mingw-w64 and GCC. Build a toolchain with `./native/setup.sh --with-ctng --ctng-target <target>`; Windows targets need wine and `linuxarm64` needs qemu-user to run the artifacts (`--install` installs both).  
 > `FFBUILD_CC` / `CC` (and `CXX`, `LD`, `AR`, …) override this selection, including versioned compilers such as `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`.  
 > Additional compiler flags can be supplied through `FFBUILD_EXTRA_CFLAGS` and `FFBUILD_EXTRA_LDFLAGS`.  
 > To inspect the resolved configuration, run `source native/env.sh && ffbuild_env_dump`.  
@@ -107,8 +122,10 @@ ffbuild/{prefix,destdir,work,log,state,pkgroot}   build root (FFBUILD_ROOT)
 artifacts/                                        build artifacts
 ```
 
+> `.buildtools/ctng/<target>` holds the crosstool-ng toolchain for each target.
+
 > `FFBUILD_ROOT` must not contain a period (this breaks path handling in `libxcb`/`libglvnd`).  
-> Artifacts match the host glibc; ~~use `FFBUILD_TOOLCHAIN_MODE=ctng` for a glibc 2.28 baseline~~.
+> linux64 artifacts match the host glibc; for a glibc 2.28 baseline, use `FFBUILD_TOOLCHAIN_MODE=ctng` (run `./native/setup.sh --with-ctng` first). linuxarm64 artifacts are aarch64 ELF on a glibc 2.28 baseline. win64 and win32 artifacts use the UCRT.
 
 ## License
 

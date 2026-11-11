@@ -34,8 +34,21 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 cd "$TMPDIR"
 
+# Implib's --target names the *target* ABI; upstream ships one script per
+# image. Derive it from the toolchain triple so cross builds get trampolines
+# for the right architecture.
+case "${FFBUILD_TOOLCHAIN:-$(uname -m)-linux-gnu}" in
+    aarch64*) _implib_target=aarch64-linux-gnu ;;
+    i686*)    _implib_target=i686-linux-gnu ;;
+    x86_64*)  _implib_target=x86_64-linux-gnu ;;
+    *)
+        echo "gen-implib: unsupported toolchain triple '${FFBUILD_TOOLCHAIN:-}'" >&2
+        exit 1
+        ;;
+esac
+
 set -x
-python3 "$IMPLIB_DIR/implib-gen.py" --target x86_64-linux-gnu --dlopen --lazy-load --verbose "$IN"
+python3 "$IMPLIB_DIR/implib-gen.py" --target "$_implib_target" --dlopen --lazy-load --verbose "$IN"
 # shellcheck disable=SC2086
 "${CC:-${FFBUILD_CROSS_PREFIX}gcc}" $CFLAGS $STAGE_CFLAGS -Wa,--noexecstack -DIMPLIB_HIDDEN_SHIMS -c ./*.tramp.S ./*.init.c
 "${AR:-${FFBUILD_CROSS_PREFIX}ar}" -rcs "$OUT" ./*.tramp.o ./*.init.o

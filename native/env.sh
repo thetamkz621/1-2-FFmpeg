@@ -1,12 +1,16 @@
 #!/bin/bash
 # shellcheck shell=bash
 #
-# native/env.sh — Environment contract for Docker-free linux64 builds.
+# native/env.sh — Environment contract for Docker-free builds.
 #
-# This file replaces the `ENV` block of images/base-linux64/Dockerfile.
+# This file replaces the `ENV` block of the images/base-<target> Dockerfiles.
 # It is *sourced* by native/setup.sh, native/download.sh and build.sh.
 #
 # ---------------------------------------------------------------- contract ----
+# Target selection
+#   FFBUILD_TARGET         linux64 (default) | win64 | win32; see native/targets/
+#                          (build.sh derives it from its first argument)
+#
 # Toolchain selection
 #   FFBUILD_TOOLCHAIN_MODE host (default) | clang | gcc | ctng
 #                          host: auto-detect (cc -> gcc -> clang)
@@ -67,6 +71,78 @@ if [[ -z "$FFBUILD_REPO_ROOT" || ! -d "$FFBUILD_REPO_ROOT/scripts.d" ]]; then
     exit 1
 fi
 
+# ---------------------------------------------------------------- target ------
+# Everything that differs between targets lives in native/targets/<target>.conf.
+# Each file is sourced directly; keys are the FFBUILD_TARGET_* variables below.
+# build.sh exports TARGET before sourcing this file; setup.sh exports
+# FFBUILD_TARGET.
+#
+#   FFBUILD_TARGET_ARCH          FFmpeg --arch, meson cpu, cmake processor
+#   FFBUILD_TARGET_OS            FFmpeg --target-os
+#   FFBUILD_TARGET_RUST          cargo --target
+#   FFBUILD_TARGET_CTNG_TRIPLE   GNU triple produced by crosstool-ng
+#   FFBUILD_TARGET_CTNG_CONFIG   complete ct-ng config under toolchain/ctng
+#   FFBUILD_TARGET_MESON_SYSTEM  cross.meson host_machine.system
+#   FFBUILD_TARGET_ENDIAN        cross.meson host_machine.endian: little | big
+#   FFBUILD_TARGET_CMAKE_SYSTEM  toolchain.cmake CMAKE_SYSTEM_NAME
+#   FFBUILD_TARGET_CMAKE_VERSION toolchain.cmake CMAKE_SYSTEM_VERSION
+#   FFBUILD_TARGET_WIN_TOOLS     extra binutils exported without triple prefix
+#   FFBUILD_TARGET_WINE          1 when meson needs exe_wrapper = wine
+#   FFBUILD_TARGET_PRUNE         toolchain pruning style: elf | mingw
+#   FFBUILD_TARGET_CPU           optional FFmpeg --cpu
+#   FFBUILD_TARGET_ARCH_CFLAGS   optional CFLAGS for the target architecture
+#   FFBUILD_TARGET_EMULATOR      optional qemu binary used to run target programs
+FFBUILD_TARGET="${FFBUILD_TARGET:-${TARGET:-linux64}}"
+export FFBUILD_TARGET
+FFBUILD_TARGETS_DIR="$FFBUILD_REPO_ROOT/native/targets"
+FFBUILD_TARGET_CONF="$FFBUILD_TARGETS_DIR/$FFBUILD_TARGET.conf"
+export FFBUILD_TARGETS_DIR FFBUILD_TARGET_CONF
+
+if [[ ! -r "$FFBUILD_TARGET_CONF" ]]; then
+    echo "native/env.sh: unknown target '$FFBUILD_TARGET'" >&2
+    echo "  known targets: $(cd "$FFBUILD_TARGETS_DIR" 2>/dev/null && \
+        printf '%s ' *.conf | sed 's/\.conf//g')" >&2
+    return 1 2>/dev/null || exit 1
+fi
+# shellcheck source=/dev/null
+source "$FFBUILD_TARGET_CONF"
+
+# Optional keys only; required ones are validated below.
+: "${FFBUILD_TARGET_WIN_TOOLS:=}"
+: "${FFBUILD_TARGET_WINE:=0}"
+: "${FFBUILD_TARGET_CPU:=}"
+: "${FFBUILD_TARGET_ARCH_CFLAGS:=}"
+: "${FFBUILD_TARGET_EMULATOR:=}"
+
+for _ffbuild_key in ARCH OS RUST CTNG_TRIPLE CTNG_CONFIG MESON_SYSTEM \
+                     CMAKE_SYSTEM CMAKE_VERSION PRUNE ENDIAN; do
+    _ffbuild_var="FFBUILD_TARGET_$_ffbuild_key"
+    if [[ -z "${!_ffbuild_var:-}" ]]; then
+        echo "native/env.sh: $FFBUILD_TARGET_CONF does not set $_ffbuild_var" >&2
+        return 1 2>/dev/null || exit 1
+    fi
+done
+unset _ffbuild_key _ffbuild_var
+
+case "$FFBUILD_TARGET_ENDIAN" in
+    little|big) ;;
+    *)
+        echo "native/env.sh: $FFBUILD_TARGET_CONF sets FFBUILD_TARGET_ENDIAN='$FFBUILD_TARGET_ENDIAN' (expected little or big)" >&2
+        return 1 2>/dev/null || exit 1
+        ;;
+esac
+
+# meson names the 32-bit x86 family "x86"; FFmpeg and cmake use "i686".
+FFBUILD_TARGET_MESON_CPU_FAMILY="$FFBUILD_TARGET_ARCH"
+[[ "$FFBUILD_TARGET_MESON_CPU_FAMILY" == i686 ]] && FFBUILD_TARGET_MESON_CPU_FAMILY=x86
+export FFBUILD_TARGET_ARCH FFBUILD_TARGET_MESON_CPU_FAMILY FFBUILD_TARGET_OS FFBUILD_TARGET_RUST
+export FFBUILD_TARGET_CTNG_TRIPLE FFBUILD_TARGET_CTNG_CONFIG
+export FFBUILD_TARGET_MESON_SYSTEM FFBUILD_TARGET_CMAKE_SYSTEM
+export FFBUILD_TARGET_CMAKE_VERSION
+export FFBUILD_TARGET_WIN_TOOLS FFBUILD_TARGET_WINE FFBUILD_TARGET_PRUNE
+export FFBUILD_TARGET_CPU FFBUILD_TARGET_ARCH_CFLAGS FFBUILD_TARGET_EMULATOR
+export FFBUILD_TARGET_ENDIAN
+
 # Snapshot caller-supplied values *before* we install defaults, so that a plain
 # `CC=clang ./build.sh ...` is honoured as an override.
 _FFBUILD_ENV_SNAP_CC="${CC-}"
@@ -115,7 +191,10 @@ export FFBUILD_DESTDIR="$FFBUILD_ROOT/destdir"
 export FFBUILD_DESTPREFIX="$FFBUILD_DESTDIR$FFBUILD_PREFIX"
 export FFBUILD_WORK="$FFBUILD_ROOT/work"
 export FFBUILD_LOG="$FFBUILD_ROOT/log"
-export FFBUILD_CTNG_ROOT="${FFBUILD_CTNG_ROOT:-$FFBUILD_ROOT/ctng}"
+# crosstool-ng is expensive to build; keep it outside FFBUILD_ROOT so that
+# FFBUILD_CLEAN=1 does not throw the toolchain away with the build tree. Each
+# target gets its own prefix: the sysroot and compilers cannot be shared.
+export FFBUILD_CTNG_ROOT="${FFBUILD_CTNG_ROOT:-${FFBUILD_BUILDTOOLS_PREFIX:-$FFBUILD_REPO_ROOT/.buildtools}/ctng/$FFBUILD_TARGET}"
 
 # --------------------------------------------------------------- helpers -----
 # pick <FFBUILD_VAR> <snapshot> <default>
@@ -197,7 +276,7 @@ _ffbuild_cc_kind() {
 
 case "$FFBUILD_TOOLCHAIN_MODE" in
 ctng)
-    FFBUILD_TOOLCHAIN_TRIPLE="${FFBUILD_TOOLCHAIN_TRIPLE:-x86_64-ffbuild-linux-gnu}"
+    FFBUILD_TOOLCHAIN_TRIPLE="${FFBUILD_TOOLCHAIN_TRIPLE:-$FFBUILD_TARGET_CTNG_TRIPLE}"
     FFBUILD_CROSS_PREFIX="${FFBUILD_TOOLCHAIN_TRIPLE}-"
     export PATH="$FFBUILD_CTNG_ROOT/bin:$PATH"
     _ffbuild_def_cc="${FFBUILD_CROSS_PREFIX}gcc"
@@ -253,6 +332,17 @@ export RANLIB="$(_ffbuild_pick FFBUILD_RANLIB "$_FFBUILD_ENV_SNAP_RANLIB" "$_ffb
 export NM="$(_ffbuild_pick FFBUILD_NM     "$_FFBUILD_ENV_SNAP_NM"     "$_ffbuild_def_nm")"
 export STRIP="$(_ffbuild_pick FFBUILD_STRIP "$_FFBUILD_ENV_SNAP_STRIP" "$_ffbuild_def_strip")"
 
+# Target-specific binutils that autotools/libtool look up by name. Only the
+# ctng toolchain provides them; host compilers cannot build for these targets.
+if [[ -n "$FFBUILD_TARGET_WIN_TOOLS" && -n "$FFBUILD_CROSS_PREFIX" ]]; then
+    for _t in $FFBUILD_TARGET_WIN_TOOLS; do
+        _u="${_t^^}"
+        printf -v "$_u" '%s' "${FFBUILD_CROSS_PREFIX}${_t}"
+        export "$_u"
+    done
+    unset _t _u
+fi
+
 # Fail early instead of letting every stage report "command not found".
 # `setup.sh --check` is the exception: it exists to diagnose bare hosts, so with
 # FFBUILD_ENV_CHECK_ONLY=1 a missing driver is only recorded here and reported by
@@ -266,7 +356,22 @@ for _t in CC CXX; do
             _ffbuild_missing_drivers+=("$_t=$_v")
         else
             echo "native/env.sh: $_t='$_v' was not found in PATH" >&2
-            echo "  install it, set $_t, or pick FFBUILD_TOOLCHAIN_MODE=host|clang|gcc" >&2
+            if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
+                # The ctng toolchain is built by setup.sh, but setup.sh sources
+                # this file before reaching the build step. Running it with
+                # FFBUILD_TOOLCHAIN_MODE=ctng would therefore fail here, so the
+                # hint must point at the host-mode invocation.
+                if [[ -d "$FFBUILD_CTNG_ROOT/bin" ]]; then
+                    echo "  the ctng toolchain is incomplete: $FFBUILD_CTNG_ROOT/bin/$_v is missing" >&2
+                    echo "  rebuild it with: ./native/setup.sh --with-ctng --force-ctng" >&2
+                else
+                    echo "  the ctng toolchain has not been built in $FFBUILD_CTNG_ROOT" >&2
+                    echo "  build it with: ./native/setup.sh --with-ctng" >&2
+                    echo "  run that command without FFBUILD_TOOLCHAIN_MODE=ctng, then build again" >&2
+                fi
+            else
+                echo "  install it, set $_t, or pick FFBUILD_TOOLCHAIN_MODE=host|clang|gcc" >&2
+            fi
             return 1 2>/dev/null || exit 1
         fi
     fi
@@ -276,12 +381,47 @@ if ((${#_ffbuild_missing_drivers[@]})); then
 fi
 unset _t _v _ffbuild_missing_drivers
 
+# A compiler override applies in every mode, but under ctng it must target the
+# same triple as the toolchain. FFBUILD_CC=gcc-12 carried over from a host
+# build would otherwise replace the cross driver while the rest of the target
+# contract (sysroot, cross descriptors) still describes the cross target, and
+# the failure only surfaces much later inside a dependency build.
+if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
+    for _t in CC CXX; do
+        _snap="_FFBUILD_ENV_SNAP_$_t"
+        _ov="FFBUILD_$_t"
+        if [[ -n "${!_ov:-}" || -n "${!_snap:-}" ]]; then
+            _v="${!_t}"
+            _target="$("$_v" -dumpmachine 2>/dev/null || true)"
+            if [[ -n "$_target" && "$_target" != "$FFBUILD_TOOLCHAIN_TRIPLE" ]]; then
+                echo "native/env.sh: $_t='$_v' targets '$_target', but $FFBUILD_TARGET needs '$FFBUILD_TOOLCHAIN_TRIPLE'" >&2
+                echo "  unset FFBUILD_$_t/$_t for ctng builds, or point it at a driver for the target triple" >&2
+                return 1 2>/dev/null || exit 1
+            fi
+        fi
+    done
+    unset _t _v _snap _ov _target
+fi
+
 FFBUILD_COMPILER="$(_ffbuild_cc_kind "$CC")"
 export FFBUILD_COMPILER
 
+# Label used in artifact names and in the build-root stamp.  ctng is a
+# toolchain rather than a compiler family, so it must not collapse into "gcc"
+# (host gcc and ctng share the same compiler kind but cannot share a build root).
+if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
+    FFBUILD_COMPILER_LABEL=ctng
+else
+    FFBUILD_COMPILER_LABEL="$FFBUILD_COMPILER"
+fi
+export FFBUILD_COMPILER_LABEL
+
 # If the caller forced CC but not CXX, keep the two drivers in the same family
 # instead of pairing clang with the mode's default g++ (or vice versa).
-if [[ -z "${FFBUILD_CXX:-}" && -z "${_FFBUILD_ENV_SNAP_CXX:-}" ]]; then
+# ctng is exempt: its CXX already carries the cross prefix and is "gcc" only
+# by compiler family, so the host g++ must not replace it.
+if [[ "$FFBUILD_TOOLCHAIN_MODE" != ctng &&
+      -z "${FFBUILD_CXX:-}" && -z "${_FFBUILD_ENV_SNAP_CXX:-}" ]]; then
     case "$FFBUILD_COMPILER:$CXX" in
     clang:clang++) ;;
     gcc:g++) ;;
@@ -316,16 +456,55 @@ else
     export FFBUILD_CMAKE_SYSROOT="${FFBUILD_CMAKE_SYSROOT:-}"
 fi
 
-# Host tools (equal to target tools for native builds).
-export HOST_CC="${HOST_CC:-$CC}"
-export HOST_CXX="${HOST_CXX:-$CXX}"
+# Host tools. For native builds they equal the target tools; for a cross
+# toolchain they must stay on the host compiler: GMP's configure builds helper
+# programs with HOST_CC, and a cross driver cannot run on the build machine
+# ("Specified HOST_CC doesn't seem to work").
+if [[ -n "${HOST_CC:-}" ]]; then
+    export HOST_CC
+elif [[ -z "$FFBUILD_CROSS_PREFIX" ]]; then
+    export HOST_CC="$CC"
+fi
+if [[ -n "${HOST_CXX:-}" ]]; then
+    export HOST_CXX
+elif [[ -z "$FFBUILD_CROSS_PREFIX" ]]; then
+    export HOST_CXX="$CXX"
+fi
 export HOST_CFLAGS="${HOST_CFLAGS:--O2 -pipe}"
 export HOST_CXXFLAGS="${HOST_CXXFLAGS:--O2 -pipe}"
 
 # ---------------------------------------------------------------- flags -------
-_ffbuild_base_cflags="-I$FFBUILD_PREFIX/include -O2 -pipe -fPIC -DPIC -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fstack-clash-protection -pthread"
+# -fPIC/-DPIC are ELF concepts. On PE they are meaningless, and -DPIC is an
+# ABI switch for some libraries: fontconfig compiles its DllMain only when
+# PIC or DLL_EXPORT is defined, which collides with libmingwex's dllmain.o in
+# a static archive. Upstream's Windows images leave PIC off.
+_ffbuild_pic_flags="-fPIC -DPIC"
+[[ "$FFBUILD_TARGET_PRUNE" == mingw ]] && _ffbuild_pic_flags=""
+# Architecture flags describe the *target*. setup.sh sources this file in host
+# mode while building the toolchain itself, and ct-ng's own configure must not
+# receive them; gate them on a resolved cross prefix.
+_ffbuild_arch_cflags=""
+[[ -n "$FFBUILD_CROSS_PREFIX" ]] && \
+    _ffbuild_arch_cflags="${FFBUILD_TARGET_ARCH_CFLAGS:+"$FFBUILD_TARGET_ARCH_CFLAGS "}"
+# -fstack-clash-protection, -pthread and -lm belong to the ELF/posix targets.
+# The upstream Windows images carry none of them: -pthread would pull
+# winpthreads into every dependency and change its threading backend.
+_ffbuild_clash=" -fstack-clash-protection"
+_ffbuild_pthread=" -pthread"
+_ffbuild_mathlib=" -lm"
+if [[ "$FFBUILD_TARGET_PRUNE" == mingw ]]; then
+    _ffbuild_clash=""
+    _ffbuild_pthread=""
+    _ffbuild_mathlib=""
+fi
+_ffbuild_base_cflags="-I$FFBUILD_PREFIX/include -O2 -pipe ${_ffbuild_arch_cflags}${_ffbuild_pic_flags:+"$_ffbuild_pic_flags "}-D_FORTIFY_SOURCE=2 -fstack-protector-strong${_ffbuild_clash}${_ffbuild_pthread}"
+unset _ffbuild_pic_flags
 _ffbuild_base_cxxflags="$_ffbuild_base_cflags"
-_ffbuild_base_ldflags="-L$FFBUILD_PREFIX/lib -O2 -pipe -fstack-protector-strong -fstack-clash-protection -Wl,-z,relro,-z,now -pthread -lm"
+# -z relro/-z now are ELF linker options; the mingw driver rejects them.
+_ffbuild_elf_ldflags="-Wl,-z,relro,-z,now"
+[[ "$FFBUILD_TARGET_PRUNE" == mingw ]] && _ffbuild_elf_ldflags=""
+_ffbuild_base_ldflags="-L$FFBUILD_PREFIX/lib -O2 -pipe ${_ffbuild_arch_cflags}-fstack-protector-strong${_ffbuild_clash} ${_ffbuild_elf_ldflags:+"$_ffbuild_elf_ldflags "}${_ffbuild_pthread}${_ffbuild_mathlib}"
+unset _ffbuild_elf_ldflags _ffbuild_arch_cflags _ffbuild_clash _ffbuild_pthread _ffbuild_mathlib
 _ffbuild_base_ldexeflags=""
 
 # ct-ng toolchain keeps upstream's static libgcc/libstdc++ linkage.
@@ -373,16 +552,39 @@ export CXXFLAGS="$(_resolve_flags FFBUILD_CXXFLAGS "$_FFBUILD_ENV_SNAP_CXXFLAGS"
 export LDFLAGS="$(_resolve_flags FFBUILD_LDFLAGS   "$_FFBUILD_ENV_SNAP_LDFLAGS"   "$_ffbuild_base_ldflags"   FFBUILD_EXTRA_LDFLAGS)"
 export LDEXEFLAGS="$(_resolve_flags FFBUILD_LDEXEFLAGS "$_FFBUILD_ENV_SNAP_LDEXEFLAGS" "$_ffbuild_base_ldexeflags" FFBUILD_EXTRA_LDEXEFLAGS)"
 
-export STAGE_CFLAGS="-fvisibility=hidden -fno-semantic-interposition${FFBUILD_EXTRA_STAGE_CFLAGS:+ $FFBUILD_EXTRA_STAGE_CFLAGS}"
-export STAGE_CXXFLAGS="-fvisibility=hidden -fno-semantic-interposition${FFBUILD_EXTRA_STAGE_CXXFLAGS:+ $FFBUILD_EXTRA_STAGE_CXXFLAGS}"
+# Upstream's Windows images build stages with -fno-semantic-interposition only;
+# -fvisibility=hidden is part of the ELF recipe and changes PE export tables.
+_ffbuild_stage_vis="-fvisibility=hidden "
+[[ "$FFBUILD_TARGET_PRUNE" == mingw ]] && _ffbuild_stage_vis=""
+export STAGE_CFLAGS="${_ffbuild_stage_vis}-fno-semantic-interposition${FFBUILD_EXTRA_STAGE_CFLAGS:+ $FFBUILD_EXTRA_STAGE_CFLAGS}"
+export STAGE_CXXFLAGS="${_ffbuild_stage_vis}-fno-semantic-interposition${FFBUILD_EXTRA_STAGE_CXXFLAGS:+ $FFBUILD_EXTRA_STAGE_CXXFLAGS}"
+unset _ffbuild_stage_vis
 export STAGE_LDFLAGS="${FFBUILD_EXTRA_STAGE_LDFLAGS:-}"
 
 # --------------------------------------------------------- ffmpeg contract ----
-FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --arch=x86_64 --target-os=linux"
+_ffbuild_arch_flags="--arch=$FFBUILD_TARGET_ARCH"
+[[ -n "$FFBUILD_TARGET_CPU" ]] && _ffbuild_arch_flags+=" --cpu=$FFBUILD_TARGET_CPU"
+FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config $_ffbuild_arch_flags --target-os=$FFBUILD_TARGET_OS"
 [[ -n "$FFBUILD_CROSS_PREFIX" ]] && \
-    FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --cross-prefix=$FFBUILD_CROSS_PREFIX --arch=x86_64 --target-os=linux"
+    FFBUILD_TARGET_FLAGS="--pkg-config=pkg-config --cross-prefix=$FFBUILD_CROSS_PREFIX $_ffbuild_arch_flags --target-os=$FFBUILD_TARGET_OS"
+unset _ffbuild_arch_flags
 export FFBUILD_TARGET_FLAGS
-export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-x86_64-unknown-linux-gnu}"
+export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-$FFBUILD_TARGET_RUST}"
+
+# Wine serves as meson's exe_wrapper. Keep its prefix inside the build root:
+# the default ~/.wine would survive deleting the repository and is a user
+# directory we must not populate.
+if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
+    export WINEPREFIX="${WINEPREFIX:-$FFBUILD_ROOT/wineprefix}"
+    export WINEDEBUG="${WINEDEBUG:--all}"
+fi
+
+# qemu-user finds the target loader and libraries through QEMU_LD_PREFIX. The
+# build itself does not run target programs, but smoke tests and any manual
+# invocation of an artifact do.
+if [[ -n "$FFBUILD_TARGET_EMULATOR" && -n "$FFBUILD_CMAKE_SYSROOT" ]]; then
+    export QEMU_LD_PREFIX="${QEMU_LD_PREFIX:-$FFBUILD_CMAKE_SYSROOT}"
+fi
 # FFmpeg's --extra-version suffix. Unset or empty keeps upstream's default
 # behaviour, i.e. the build date in YYYYMMDD form.
 export FFBUILD_EXTRA_VERSION="${FFBUILD_EXTRA_VERSION:-$(date +%Y%m%d)}"
@@ -422,8 +624,12 @@ export FFBUILD_CMAKE_TOOLCHAIN="${FFBUILD_CMAKE_TOOLCHAIN:-$FFBUILD_REPO_ROOT/to
 export FFBUILD_MESON_CROSS_FILE="${FFBUILD_MESON_CROSS_FILE:-$FFBUILD_REPO_ROOT/toolchain/generated/cross.meson}"
 
 export PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
+# PKG_CONFIG_LIBDIR replaces the default search path; do not also export
+# PKG_CONFIG_PATH. Upstream sets only LIBDIR, and the duplicate PATH leaks the
+# target prefix into host tools: cargo build scripts (rav1e's libgit2-sys)
+# then link the Windows libz.a into a host binary.
 export PKG_CONFIG_LIBDIR="$FFBUILD_PREFIX/lib/pkgconfig:$FFBUILD_PREFIX/share/pkgconfig"
-export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
+unset PKG_CONFIG_PATH
 
 # Upstream's Docker layers copy $FFBUILD_PREFIX/share/aclocal into
 # /usr/share/aclocal (10-xorg-macros, 45-x11). Natively we simply advertise the
@@ -643,36 +849,71 @@ _ffbuild_meson_array() {
 }
 
 ffbuild_write_toolchain_files() {
-    local dir="$FFBUILD_REPO_ROOT/toolchain/generated"
+    local dir="$FFBUILD_REPO_ROOT/toolchain/generated" need_wrapper=0
     mkdir -p "$dir"
+
+    # Target binaries cannot run here unless wine is available (Windows) or the
+    # build machine shares the target architecture. meson needs to know before
+    # it attempts a run-style feature probe.
+    if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
+        need_wrapper=1
+    elif [[ -n "$FFBUILD_CROSS_PREFIX" && "$FFBUILD_TARGET_OS" == linux &&
+            "$FFBUILD_TARGET_ARCH" != "$(uname -m)" ]]; then
+        need_wrapper=1
+    fi
 
     {
         echo "# Generated by native/env.sh — do not edit."
         echo "[binaries]"
         echo "c = $(_ffbuild_meson_array "$CC")"
         echo "cpp = $(_ffbuild_meson_array "$CXX")"
+        # Upstream lists ld for the Linux cross files and omits it for Windows;
+        # nm is never listed because meson derives it from the compiler.
+        [[ "$FFBUILD_TARGET_OS" != mingw32 ]] && \
+            echo "ld = $(_ffbuild_meson_array "$LD")"
         echo "ar = $(_ffbuild_meson_array "$AR")"
         echo "ranlib = $(_ffbuild_meson_array "$RANLIB")"
         echo "strip = $(_ffbuild_meson_array "$STRIP")"
-        echo "nm = $(_ffbuild_meson_array "$NM")"
+        if [[ -n "$FFBUILD_TARGET_WIN_TOOLS" ]]; then
+            echo "windres = $(_ffbuild_meson_array "${WINDRES:-${FFBUILD_CROSS_PREFIX}windres}")"
+            echo "dlltool = $(_ffbuild_meson_array "${DLLTOOL:-${FFBUILD_CROSS_PREFIX}dlltool}")"
+        fi
+        # meson executes target binaries for some feature probes (glib runs
+        # five of them), so a cross build for Windows needs an exe wrapper.
+        if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
+            echo "exe_wrapper = $(_ffbuild_meson_array wine)"
+        fi
         echo
         echo "[host_machine]"
-        echo "system = 'linux'"
-        echo "cpu_family = 'x86_64'"
-        echo "cpu = 'x86_64'"
-        echo "endian = 'little'"
-        if [[ -n "$FFBUILD_CMAKE_SYSROOT" ]]; then
+        echo "system = '$FFBUILD_TARGET_MESON_SYSTEM'"
+        echo "cpu_family = '$FFBUILD_TARGET_MESON_CPU_FAMILY'"
+        echo "cpu = '$FFBUILD_TARGET_ARCH'"
+        echo "endian = '$FFBUILD_TARGET_ENDIAN'"
+        # Do not set sys_root here: meson prefixes every pkg-config -I path
+        # with it, which turns an absolute prefix path such as
+        # $FFBUILD_PREFIX/include/freetype2 into <sysroot>$FFBUILD_PREFIX/... .
+        # The cross compiler already searches its own sysroot for system
+        # headers and libraries.
+        if (( need_wrapper )); then
             echo
             echo "[properties]"
-            echo "sys_root = '$FFBUILD_CMAKE_SYSROOT'"
+            echo "needs_exe_wrapper = true"
+            echo "have_c99_vsnprintf = true"
+            echo "have_c99_snprintf = true"
+            # Upstream declares the unix98 result only for its cross Linux
+            # files; the Windows files stop after the two C99 checks. Leaving
+            # va_val_copy unset keeps meson from assuming a result it cannot
+            # verify here.
+            [[ "$FFBUILD_TARGET_OS" != mingw32 ]] && \
+                echo "have_unix98_printf = true"
         fi
     } > "$dir/cross.meson"
 
     {
         echo "# Generated by native/env.sh — do not edit."
-        echo "set(CMAKE_SYSTEM_NAME Linux)"
-        echo "set(CMAKE_SYSTEM_PROCESSOR x86_64)"
-        echo "set(CMAKE_SYSTEM_VERSION 4.18.20)"
+        echo "set(CMAKE_SYSTEM_NAME $FFBUILD_TARGET_CMAKE_SYSTEM)"
+        echo "set(CMAKE_SYSTEM_PROCESSOR $FFBUILD_TARGET_ARCH)"
+        echo "set(CMAKE_SYSTEM_VERSION $FFBUILD_TARGET_CMAKE_VERSION)"
         echo
         echo "set(CMAKE_C_COMPILER \"$CC\")"
         echo "set(CMAKE_CXX_COMPILER \"$CXX\")"
@@ -680,10 +921,19 @@ ffbuild_write_toolchain_files() {
         echo "set(CMAKE_RANLIB \"$RANLIB\")"
         echo "set(CMAKE_NM \"$NM\")"
         echo "set(CMAKE_STRIP \"$STRIP\")"
+        if [[ -n "$FFBUILD_TARGET_WIN_TOOLS" ]]; then
+            echo "set(CMAKE_RC_COMPILER \"${WINDRES:-${FFBUILD_CROSS_PREFIX}windres}\")"
+        fi
         echo
         if [[ -n "$FFBUILD_CMAKE_SYSROOT" ]]; then
+            # Upstream searches the toolchain root as well as the sysroot and
+            # the dependency prefix; libgcc/libstdc++ live outside the sysroot.
+            _ffbuild_cmake_roots="\"$FFBUILD_CMAKE_SYSROOT\" \"$FFBUILD_PREFIX\""
+            [[ -n "$FFBUILD_CTNG_ROOT" ]] && \
+                _ffbuild_cmake_roots="\"$FFBUILD_CTNG_ROOT\" $_ffbuild_cmake_roots"
             echo "set(CMAKE_SYSROOT \"$FFBUILD_CMAKE_SYSROOT\")"
-            echo "list(APPEND CMAKE_FIND_ROOT_PATH \"$FFBUILD_CMAKE_SYSROOT\" \"$FFBUILD_PREFIX\")"
+            echo "list(APPEND CMAKE_FIND_ROOT_PATH $_ffbuild_cmake_roots)"
+            unset _ffbuild_cmake_roots
             echo "set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)"
             echo "set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)"
             echo "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)"
@@ -692,6 +942,14 @@ ffbuild_write_toolchain_files() {
         fi
     } > "$dir/toolchain.cmake"
 }
+
+# The descriptors embed CC/CXX and the sysroot, so they must be regenerated
+# whenever the environment is re-evaluated. Generating them only in setup.sh
+# leaves a host-mode toolchain.cmake behind when the build later runs with
+# ctng (or clang), and CMake then compiles with the wrong driver.
+if [[ "${FFBUILD_ENV_CHECK_ONLY:-0}" != 1 ]]; then
+    ffbuild_write_toolchain_files
+fi
 
 # --------------------------------------------------------------- QA dump ------
 # `source native/env.sh && ffbuild_env_dump` prints the resolved configuration.
@@ -703,6 +961,8 @@ build root     : $FFBUILD_ROOT
 prefix         : $FFBUILD_PREFIX
 destdir        : $FFBUILD_DESTDIR
 destprefix     : $FFBUILD_DESTPREFIX
+target         : $FFBUILD_TARGET (--arch=$FFBUILD_TARGET_ARCH --target-os=$FFBUILD_TARGET_OS)
+ctng root      : $FFBUILD_CTNG_ROOT
 toolchain mode : $FFBUILD_TOOLCHAIN_MODE
 compiler       : $FFBUILD_COMPILER ($CC / $CXX)
 --host triple  : $FFBUILD_TOOLCHAIN

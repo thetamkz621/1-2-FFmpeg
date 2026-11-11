@@ -40,6 +40,9 @@ source util/vars.sh "$TARGET" "$VARIANT" "$@"
 # so the target/variant contract must be exported for them to see it.
 export TARGET VARIANT ADDINS_STR
 export LICENSE_FILE
+# Upstream's generate.sh exports this into the container; stage scripts read it
+# directly (50-ffnvcodec selects the SDK branch with it).
+export FFVER="$(ffbuild_ffver)"
 
 # shellcheck source=native/env.sh
 source native/env.sh
@@ -80,10 +83,62 @@ done
 # stages see the resolved compilers (including any override).
 ffbuild_write_toolchain_files
 
-if [[ "$TARGET" != linux64 ]]; then
-    echo "build.sh: this project supports the linux64 target only (got '$TARGET')." >&2
+# A 64-bit wine can be installed while its 32-bit support is missing. The cross
+# file still names wine as exe_wrapper, so meson would fail its first feature
+# probe with an opaque loader error; compile and run a trivial PE once here.
+ffbuild_check_wine32() {
+    local dir
+    dir="$(mktemp -d)"
+    printf 'int main(void) { return 0; }\n' > "$dir/probe.c"
+    # shellcheck disable=SC2086
+    if ! $CC -o "$dir/probe.exe" "$dir/probe.c" >"$dir/build.log" 2>&1; then
+        echo "build.sh: cannot compile a 32-bit Windows probe with '$CC'" >&2
+        sed 's/^/          /' "$dir/build.log" >&2
+        rm -rf "$dir"
+        return 1
+    fi
+    if ! WINEPREFIX="$dir/prefix" wine "$dir/probe.exe" >/dev/null 2>&1; then
+        echo "build.sh: wine cannot run 32-bit Windows binaries" >&2
+        echo "          install the 32-bit part of wine; some distributions split" >&2
+        echo "          it into a separate package or require the i386 architecture" >&2
+        rm -rf "$dir"
+        return 1
+    fi
+    rm -rf "$dir"
+}
+
+case "$TARGET" in
+linux64)
+    ;;
+linuxarm64)
+    # Only the ctng toolchain can produce aarch64 binaries here; the host
+    # compilers are Linux-only and target x86_64.
+    if [[ "$FFBUILD_TOOLCHAIN_MODE" != ctng ]]; then
+        echo "build.sh: target '$TARGET' requires FFBUILD_TOOLCHAIN_MODE=ctng" >&2
+        exit 2
+    fi
+    ;;
+win32|win64)
+    # Only the ctng toolchain can produce Windows binaries here; the host
+    # compilers are Linux-only.
+    if [[ "$FFBUILD_TOOLCHAIN_MODE" != ctng ]]; then
+        echo "build.sh: target '$TARGET' requires FFBUILD_TOOLCHAIN_MODE=ctng" >&2
+        exit 2
+    fi
+    # meson runs target binaries for feature probes; the cross file points at
+    # wine, so a missing wine shows up as a confusing meson error much later.
+    if ! command -v wine >/dev/null 2>&1; then
+        echo "build.sh: target '$TARGET' needs wine (used as meson's exe_wrapper)" >&2
+        echo "          install it, e.g. ./native/setup.sh --install --ctng-target $TARGET" >&2
+        exit 2
+    fi
+    [[ "$TARGET" == win32 ]] && { ffbuild_check_wine32 || exit 2; }
+    ;;
+*)
+    echo "build.sh: unsupported target '$TARGET' (supported: linux64, linuxarm64, win64, win32)" >&2
     exit 2
-fi
+    ;;
+esac
 
 if [[ -n "${FFBUILD_CLEAN:-}" ]]; then
     echo "== cleaning $FFBUILD_ROOT =="
@@ -122,18 +177,27 @@ trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
 # A build root carries .done markers and static libraries built by one compiler;
 # reusing it with the other silently mixes object files. Record the compiler on
 # first use and refuse to continue on a mismatch (FFBUILD_CLEAN=1 wipes the root).
+# The stamp carries the target as well as the compiler: linux64 and win64 share
+# FFBUILD_ROOT by default, and their stage state is not interchangeable.
+_build_label="${FFBUILD_TARGET}:${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}}"
 if [[ -n "${FFBUILD_COMPILER:-}" ]]; then
     if [[ -f "$FFBUILD_ROOT/.compiler" ]]; then
-        _prev_compiler="$(cat "$FFBUILD_ROOT/.compiler" 2>/dev/null || true)"
-        if [[ -n "$_prev_compiler" && "$_prev_compiler" != "$FFBUILD_COMPILER" ]]; then
-            echo "build.sh: $FFBUILD_ROOT was built with $_prev_compiler, now using $FFBUILD_COMPILER" >&2
+        _prev_raw="$(cat "$FFBUILD_ROOT/.compiler" 2>/dev/null || true)"
+        # Build roots written before targets existed hold a bare compiler label.
+        case "$_prev_raw" in
+            *:*) _prev_compiler="$_prev_raw" ;;
+            ?*)  _prev_compiler="linux64:$_prev_raw" ;;
+            *)   _prev_compiler="" ;;
+        esac
+        if [[ -n "$_prev_compiler" && "$_prev_compiler" != "$_build_label" ]]; then
+            echo "build.sh: $FFBUILD_ROOT was built with $_prev_compiler, now using $_build_label" >&2
             echo "          use FFBUILD_ROOT=... for a separate tree, or FFBUILD_CLEAN=1 to start over" >&2
             exit 2
         fi
     else
-        printf '%s\n' "$FFBUILD_COMPILER" > "$FFBUILD_ROOT/.compiler"
+        printf '%s\n' "$_build_label" > "$FFBUILD_ROOT/.compiler"
     fi
-    unset _prev_compiler
+    unset _prev_compiler _prev_raw
 fi
 
 FFMPEG_REPO="${FFMPEG_REPO:-https://github.com/FFmpeg/FFmpeg.git}"
@@ -185,6 +249,21 @@ ffbuild_stage_skipped() {
     return 1
 }
 
+# Evaluate one script's ffbuild_enabled. Directory stages (50-vaapi, 45-fonts,
+# 50-dvd, ...) aggregate several scripts, and the stage-level check only sees
+# the last one, so each script has to be asked separately. Upstream's Dockerfile
+# emitter does the same when it decides whether to emit a RUN step.
+script_enabled() {
+    local SCRIPT="$1"
+    (
+        SELF="$SCRIPT"
+        # shellcheck disable=SC1090
+        source "$SCRIPT" 2>/dev/null || exit 1
+        declare -F ffbuild_enabled >/dev/null || exit 0
+        ffbuild_enabled
+    )
+}
+
 run_one_script() {
     local SCRIPT="$1"
     local STAGENAME
@@ -195,6 +274,11 @@ run_one_script() {
     # already completed are skipped unless FFBUILD_FORCE is set.
     if [[ -z "${FFBUILD_FORCE:-}" && -f "$FFBUILD_STATE/${STAGENAME}.done" ]]; then
         echo "   (already built: $STAGENAME)"
+        return 0
+    fi
+
+    if ! script_enabled "$SCRIPT"; then
+        echo "-- skip (not applicable to $TARGET/$VARIANT): $SCRIPT"
         return 0
     fi
 
@@ -277,7 +361,7 @@ build_deps() {
     done
 }
 
-echo "== toolchain: ${FFBUILD_COMPILER:-unknown} (CC=${CC:-?} CXX=${CXX:-?}, mode=${FFBUILD_TOOLCHAIN_MODE:-?}) =="
+echo "== toolchain: ${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}} (CC=${CC:-?} CXX=${CXX:-?}, mode=${FFBUILD_TOOLCHAIN_MODE:-?}) =="
 
 if [[ -z "${FFBUILD_FFMPEG_ONLY:-}" ]]; then
     build_deps
@@ -359,7 +443,7 @@ cd "$FFBUILD_REPO_ROOT"
 ARTIFACTS_PATH="$FFBUILD_REPO_ROOT/artifacts"
 mkdir -p "$ARTIFACTS_PATH"
 
-BUILD_NAME="ffmpeg-$("$FFMPEG_DIR/ffbuild/version.sh" "$FFMPEG_DIR")-${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}-${FFBUILD_COMPILER:-unknown}-${FFBUILD_BUILD_DATE:-unknown}"
+BUILD_NAME="ffmpeg-$("$FFMPEG_DIR/ffbuild/version.sh" "$FFMPEG_DIR")-${TARGET}-${VARIANT}${ADDINS_STR:+-}${ADDINS_STR}-${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}}-${FFBUILD_BUILD_DATE:-unknown}"
 PKGROOT="$FFBUILD_ROOT/pkgroot/$BUILD_NAME"
 rm -rf "$FFBUILD_ROOT/pkgroot"
 mkdir -p "$PKGROOT"
@@ -380,8 +464,15 @@ fi
     cp "$FFMPEG_DIR/$LICENSE_FILE" "$PKGROOT/LICENSE.txt"
 
 cd "$FFBUILD_ROOT/pkgroot"
-OUTPUT_FNAME="${BUILD_NAME}.tar.xz"
-tar -I "xz -T0" -cf "$ARTIFACTS_PATH/${OUTPUT_FNAME}" "$BUILD_NAME"
+# Upstream ships Windows builds as zip and every other target as tar.xz;
+# keep the extension users and release tooling expect.
+if [[ "$TARGET" == win* ]]; then
+    OUTPUT_FNAME="${BUILD_NAME}.zip"
+    zip -9 -r -q "$ARTIFACTS_PATH/${OUTPUT_FNAME}" "$BUILD_NAME"
+else
+    OUTPUT_FNAME="${BUILD_NAME}.tar.xz"
+    tar -I "xz -T0" -cf "$ARTIFACTS_PATH/${OUTPUT_FNAME}" "$BUILD_NAME"
+fi
 cd "$FFBUILD_REPO_ROOT"
 
 echo
