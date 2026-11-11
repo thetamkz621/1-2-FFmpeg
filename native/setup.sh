@@ -585,8 +585,8 @@ do_check() {
         if command -v "$FFBUILD_TARGET_EMULATOR" >/dev/null 2>&1; then
             rt_ok "qemu                  $FFBUILD_TARGET: $(command -v "$FFBUILD_TARGET_EMULATOR")"
         else
-            rt_missing "qemu                  $FFBUILD_TARGET: run artifacts" \
-                       "$(pkg_cmd qemu_user)" optional
+            rt_warn "qemu                  $FFBUILD_TARGET: run artifacts" \
+                    "$(pkg_cmd qemu_user)"
         fi
     fi
     # 默认变体经 50-ffnvcodec 打开 --enable-cuda-llvm，configure 把 nvcc 默认成 clang，
