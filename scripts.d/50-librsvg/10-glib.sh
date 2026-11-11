@@ -22,6 +22,16 @@ ffbuild_dockerdl() {
 }
 
 ffbuild_dockerbuild() {
+    # A previous run of this stage installs proxy-libintl into the shared
+    # prefix. On the next run dependency('intl') resolves against those files
+    # instead of the subproject: the header declares the functions dllimport,
+    # the probe for ngettext fails to link, and meson returns the cached
+    # external dependency even with allow_fallback, so the assert on an
+    # internal dependency fires. Remove both so a rebuild resolves intl from
+    # source; ninja install writes them back, and glib-2.0.pc keeps
+    # advertising -lintl for downstream stages.
+    rm -f "$FFBUILD_PREFIX/include/libintl.h" "$FFBUILD_PREFIX/lib/libintl.a"
+
     # Skip auto-initialization of GIO appinfo. It's relatively expensive and automatically done on demand when needed.
     sed -zi 's/[^\n]*gio_win32_appinfo_init[^\n]*\n//g; t; q1' gio/giomodule.c
 
