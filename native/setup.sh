@@ -489,11 +489,16 @@ do_check() {
 
     echo "== runtime prerequisites (not managed; install from your distro) =="
     rt_ok()      { printf '  [ok]      %s\n' "$1"; }
-    # 第三个参数为 optional 时只提示、不影响退出码。
+    # [warn] 只提示：不阻断构建，也不影响退出码。用于"不满足也能构建，但产物或
+    # 可选能力会受影响"的情况。
+    rt_warn() {
+        printf '  [warn]    %s\n              %s\n' "$1" "$2"
+        return 0
+    }
     rt_blocking=0
     rt_missing() {
         printf '  [MISSING] %s\n              %s\n' "$1" "$2"
-        [[ "${3:-}" == optional ]] || rt_blocking=1
+        rt_blocking=1
     }
 
     # 编译器由 FFBUILD_TOOLCHAIN_MODE 选择（host 自动探测）；这里只报告解析结果。
@@ -619,9 +624,32 @@ do_check() {
                    "$(pkg_cmd ocaml); setup installs num through opam when the repo has none" ;;
     esac
 
+    # shaderc 的 native_build 先 unset CC/CXX，cmake 因而使用 PATH 上的 c++。
+    # 这里探测的正是那个 c++，而不是 $CXX：glslang 需要 std::filesystem，GCC 9 之前
+    # 的 libstdc++ 还要额外链接 -lstdc++fs，缺失时链接失败。
+    local host_cxx host_cxx_ok=0 _cxx_dir
+    host_cxx="$(command -v c++ 2>/dev/null || true)"
+    if [[ -n "$host_cxx" ]]; then
+        _cxx_dir="${TMPDIR:-/tmp}/ffbuild-hostcxx.$$"
+        mkdir -p "$_cxx_dir"
+        if printf '%s\n' '#include <filesystem>
+int main(int argc, char **argv) {
+    std::filesystem::path p(argv[0]);
+    return std::filesystem::exists(p) ? 0 : 1;
+}' | env -u CC -u CXX "$host_cxx" -std=gnu++17 -x c++ - -o "$_cxx_dir/probe" >/dev/null 2>&1; then
+            host_cxx_ok=1
+        fi
+        rm -rf "$_cxx_dir"
+    fi
+    if (( host_cxx_ok )); then
+        rt_ok "host c++ (shaderc)    $host_cxx"
+    else
+        rt_missing "host c++ (shaderc)    cannot link a C++17 std::filesystem program" \
+                   "shaderc ignores CC/CXX and uses c++ from PATH; install a C++17-capable toolchain and put its bin/ first in PATH"
+    fi
     # 依赖里已经有 C++23 的用法（openal-soft 用 string_view 的范围构造）。直接
     # 探测标准库能力，比按编译器版本号判断可靠：clang 也可能配着旧的 libstdc++。
-    local cxx_probe cxx_hint
+    local cxx_probe
     cxx_probe='#include <algorithm>
 #include <ranges>
 #include <string_view>
@@ -637,22 +665,8 @@ int main(int argc, char **argv) {
     if printf '%s\n' "$cxx_probe" | "$CXX" -std=gnu++20 -x c++ -fsyntax-only - >/dev/null 2>&1; then
         rt_ok "c++23 string_view      openal (CXX=$CXX)"
     else
-        cxx_hint="$(pkg_cmd cxx23)"
-        # 装好的新编译器不一定在 PATH 上（RHEL 8 的 gcc-toolset、Ubuntu 的 gcc-12）：
-        # 这时给命令不如给"怎么用它"，否则用户会以为还要再装一个。
-        local _ts _ts_name
-        if command -v g++-12 >/dev/null 2>&1; then
-            cxx_hint="g++-12 is installed: rerun with FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12"
-        else
-            for _ts in /opt/rh/gcc-toolset-*/root/usr/bin/g++; do
-                [[ -x "$_ts" ]] || continue
-                _ts_name="${_ts#/opt/rh/}"; _ts_name="${_ts_name%%/*}"
-                cxx_hint="$_ts_name is installed (not on PATH): rerun under 'scl enable $_ts_name bash', or set FFBUILD_CC=${_ts%++} FFBUILD_CXX=$_ts"
-                break
-            done
-        fi
-        unset _ts _ts_name
-        rt_missing "c++23 string_view      openal (CXX=$CXX)" "$cxx_hint"
+        rt_missing "c++23 string_view      openal (CXX=$CXX)" \
+                   "$(pkg_cmd cxx23); or point FFBUILD_CXX at an installed compiler that supports it"
     fi
 
     # Rust 产物（rav1e/librsvg）里带 LLVM bitcode，binutils 的 bfd 靠 LLVMgold

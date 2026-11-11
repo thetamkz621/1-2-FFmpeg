@@ -23,10 +23,31 @@
 安装支持 C++23 的编译器（GCC 12 或更高）。使用 clang 时，其配套的 libstdc++ 头文件也需为 GCC 12 或更高版本。
 
 例如：
-- RHEL 8：系统默认的 GCC 8 不满足要求。安装仓库中可用的 `gcc-toolset`（版本依仓库而定），然后用 `scl enable <toolset> bash` 启用；或将 `FFBUILD_CC` / `FFBUILD_CXX` 指向 `/opt/rh/<toolset>/root/usr/bin/gcc` 与 `g++`。若已安装 toolset，`--check` 的提示会给出其路径与启用方式。
+- RHEL 8：系统默认的 GCC 8 不满足要求。安装仓库中可用的 `gcc-toolset`（版本依仓库而定），然后用 `scl enable <toolset> bash` 启用；或将 `FFBUILD_CC` / `FFBUILD_CXX` 指向 `/opt/rh/<toolset>/root/usr/bin/gcc` 与 `g++`。
 - Ubuntu 22.04：系统默认的 GCC 11 不满足要求。安装 `gcc-12` 与 `g++-12`，然后设置 `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`。
 
 修改后重新运行 `--check`，确认 `c++23 string_view` 一项通过。
+
+## `50-shaderc` 构建失败（`c++` 与 `CXX` 不同）
+
+**症状**：`47-vulkan/50-shaderc` 阶段失败，错误涉及 `std::filesystem` 的未定义引用；`openal` 的 C++23 检查可能已通过。
+
+**原因**：该阶段的 native_build 先 `unset CC CXX`，再由 cmake 使用 PATH 上的 `c++`。`FFBUILD_CC` / `FFBUILD_CXX` 无法传递到这里，只设置这两个变量不改变该阶段的行为。
+
+**处理**：把支持 C++17 的编译器放到 PATH 最前，例如 `source /opt/rh/<toolset>/enable` 或 `export PATH=<toolchain>/bin:$PATH`。`--check` 的 `host c++ (shaderc)` 一项会提前报告该问题。
+
+## clang 构建时 `implib-gen` 报 `Unrecognized form`
+
+**症状**：`40-libdrm`、`50-libva` 或 `45-x11` 阶段失败，输出包含：
+
+```
+implib-gen.py: error: readelf failed with retcode 0:
+readelf: Warning: Unrecognized form: 0x22
+```
+
+**原因**：clang 默认生成 DWARF5 调试信息，宿主 binutils 的 `readelf` 不认识其中部分形式；`util/bin/gen-implib` 调用的 `implib-gen.py` 把 `readelf` 的任何 stderr 输出当作失败。
+
+**处理**：让编译器生成旧版调试信息，例如 `FFBUILD_EXTRA_CFLAGS=-gdwarf-4 FFBUILD_EXTRA_CXXFLAGS=-gdwarf-4`；或升级宿主 binutils。
 
 ## `ar` 索引符号失败或 LLVMgold 版本过低
 

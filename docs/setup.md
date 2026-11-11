@@ -62,7 +62,8 @@ EL8 不安装 OpenSSL 开发包：系统 OpenSSL 过旧时，cargo-c 通过自�
 ```
 [ok]       已就绪
 [managed]  由 .buildtools/ 提供，不计为失败
-[MISSING]  缺失；通常下一行给出安装命令
+[MISSING]  缺失；通常下一行给出安装命令，构建无法进行
+[warn]     不阻断构建；产物或可选能力可能受影响
 [absent]   可选工具；缺失不影响构建
 [pending]  尚未满足，但 setup 会自动完成（例如 cargo-c 以 vendored OpenSSL 构建）
 ```
