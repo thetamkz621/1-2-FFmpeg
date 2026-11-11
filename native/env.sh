@@ -87,7 +87,6 @@ fi
 #   FFBUILD_TARGET_CMAKE_SYSTEM  toolchain.cmake CMAKE_SYSTEM_NAME
 #   FFBUILD_TARGET_CMAKE_VERSION toolchain.cmake CMAKE_SYSTEM_VERSION
 #   FFBUILD_TARGET_WIN_TOOLS     extra binutils exported without triple prefix
-#   FFBUILD_TARGET_WINE          1 when meson needs exe_wrapper = wine
 #   FFBUILD_TARGET_PRUNE         toolchain pruning style: elf | mingw
 #   FFBUILD_TARGET_CPU           optional FFmpeg --cpu
 #   FFBUILD_TARGET_ARCH_CFLAGS   optional CFLAGS for the target architecture
@@ -109,7 +108,6 @@ source "$FFBUILD_TARGET_CONF"
 
 # Optional keys only; required ones are validated below.
 : "${FFBUILD_TARGET_WIN_TOOLS:=}"
-: "${FFBUILD_TARGET_WINE:=0}"
 : "${FFBUILD_TARGET_CPU:=}"
 : "${FFBUILD_TARGET_ARCH_CFLAGS:=}"
 : "${FFBUILD_TARGET_EMULATOR:=}"
@@ -139,7 +137,7 @@ export FFBUILD_TARGET_ARCH FFBUILD_TARGET_MESON_CPU_FAMILY FFBUILD_TARGET_OS FFB
 export FFBUILD_TARGET_CTNG_TRIPLE FFBUILD_TARGET_CTNG_CONFIG
 export FFBUILD_TARGET_MESON_SYSTEM FFBUILD_TARGET_CMAKE_SYSTEM
 export FFBUILD_TARGET_CMAKE_VERSION
-export FFBUILD_TARGET_WIN_TOOLS FFBUILD_TARGET_WINE FFBUILD_TARGET_PRUNE
+export FFBUILD_TARGET_WIN_TOOLS FFBUILD_TARGET_PRUNE
 export FFBUILD_TARGET_CPU FFBUILD_TARGET_ARCH_CFLAGS FFBUILD_TARGET_EMULATOR
 export FFBUILD_TARGET_ENDIAN
 
@@ -571,14 +569,6 @@ unset _ffbuild_arch_flags
 export FFBUILD_TARGET_FLAGS
 export FFBUILD_RUST_TARGET="${FFBUILD_RUST_TARGET:-$FFBUILD_TARGET_RUST}"
 
-# Wine serves as meson's exe_wrapper. Keep its prefix inside the build root:
-# the default ~/.wine would survive deleting the repository and is a user
-# directory we must not populate.
-if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
-    export WINEPREFIX="${WINEPREFIX:-$FFBUILD_ROOT/wineprefix}"
-    export WINEDEBUG="${WINEDEBUG:--all}"
-fi
-
 # qemu-user finds the target loader and libraries through QEMU_LD_PREFIX. The
 # build itself does not run target programs, but smoke tests and any manual
 # invocation of an artifact do.
@@ -849,17 +839,18 @@ _ffbuild_meson_array() {
 }
 
 ffbuild_write_toolchain_files() {
-    local dir="$FFBUILD_REPO_ROOT/toolchain/generated" need_wrapper=0
+    local dir="$FFBUILD_REPO_ROOT/toolchain/generated" cannot_run=0
     mkdir -p "$dir"
 
-    # Target binaries cannot run here unless wine is available (Windows) or the
-    # build machine shares the target architecture. meson needs to know before
-    # it attempts a run-style feature probe.
-    if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
-        need_wrapper=1
+    # Target binaries cannot run here: Windows PE files need wine and a cross
+    # build for another Linux architecture needs qemu, neither of which meson
+    # can use for glib's feature probes. Declare it so meson takes the
+    # compile-time answers in [properties] instead of attempting a run.
+    if [[ "$FFBUILD_TARGET_OS" == mingw32 ]]; then
+        cannot_run=1
     elif [[ -n "$FFBUILD_CROSS_PREFIX" && "$FFBUILD_TARGET_OS" == linux &&
             "$FFBUILD_TARGET_ARCH" != "$(uname -m)" ]]; then
-        need_wrapper=1
+        cannot_run=1
     fi
 
     {
@@ -878,11 +869,6 @@ ffbuild_write_toolchain_files() {
             echo "windres = $(_ffbuild_meson_array "${WINDRES:-${FFBUILD_CROSS_PREFIX}windres}")"
             echo "dlltool = $(_ffbuild_meson_array "${DLLTOOL:-${FFBUILD_CROSS_PREFIX}dlltool}")"
         fi
-        # meson executes target binaries for some feature probes (glib runs
-        # five of them), so a cross build for Windows needs an exe wrapper.
-        if [[ "$FFBUILD_TARGET_WINE" == 1 ]]; then
-            echo "exe_wrapper = $(_ffbuild_meson_array wine)"
-        fi
         echo
         echo "[host_machine]"
         echo "system = '$FFBUILD_TARGET_MESON_SYSTEM'"
@@ -894,7 +880,7 @@ ffbuild_write_toolchain_files() {
         # $FFBUILD_PREFIX/include/freetype2 into <sysroot>$FFBUILD_PREFIX/... .
         # The cross compiler already searches its own sysroot for system
         # headers and libraries.
-        if (( need_wrapper )); then
+        if (( cannot_run )); then
             echo
             echo "[properties]"
             echo "needs_exe_wrapper = true"

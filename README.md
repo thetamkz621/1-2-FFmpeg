@@ -7,7 +7,7 @@
 
 基于 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的去 Docker 化版本：直接在 Linux x86_64 主机上构建 FFmpeg 及其依赖。
 
-支持 `linux64`、`linuxarm64`、`win64` 与 `win32` 目标。`linuxarm64` 与 Windows 目标只能使用 crosstool-ng 工具链；Windows 目标需要 wine，`win32` 还要求 wine 能运行 32 位程序。
+支持 `linux64`、`linuxarm64`、`win64` 与 `win32` 目标。`linuxarm64` 与 Windows 目标只能使用 crosstool-ng 工具链。
 
 ## 文档
 
@@ -15,7 +15,7 @@
 |---|---|
 | [配置构建环境](docs/setup.md) | 前置条件、各发行版所需软件包、`setup.sh` 全部选项、`--check` 输出说明 |
 | [构建](docs/build.md) | 编译器与工具链模式、构建控制变量、目录布局、源码缓存 |
-| [故障排查](docs/troubleshooting.md) | C++23、LLVMgold、OCaml num、Windows 目标缺少 wine、权限问题、弱依赖 |
+| [故障排查](docs/troubleshooting.md) | C++23、LLVMgold、OCaml num、权限问题、弱依赖 |
 
 ## 构建方法
 
@@ -54,7 +54,7 @@
 * `win64`（x86_64 Windows，仅 ctng）
 * `win32`（x86 Windows，仅 ctng）
 
-`win64` 与 `win32` 需要先安装 wine 并构建对应的 crosstool-ng 工具链：
+`win64` 与 `win32` 需要先构建对应的 crosstool-ng 工具链：
 
 ```bash
 ./native/setup.sh --install --with-ctng --ctng-target win64
@@ -98,7 +98,7 @@ FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linuxarm64 gpl-shared 9.0   # 需先构�
 ```
 
 > [!NOTE]
-> `host`（默认）按 `cc` → `gcc` → `clang` 顺序探测，`CXX` 跟随同一编译器家族；`clang` / `gcc` 仅设置宿主工具链的默认二进制名称；`ctng` 使用本地构建的 crosstool-ng 工具链，按目标存放在 `.buildtools/ctng/<target>`；linux64 与 linuxarm64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC，耗时较长。构建工具链时使用 `./native/setup.sh --with-ctng --ctng-target <目标>`；Windows 目标需安装 wine，`linuxarm64` 需安装 qemu-user 以运行产物（`--install` 会一并安装）。  
+> `host`（默认）按 `cc` → `gcc` → `clang` 顺序探测，`CXX` 跟随同一编译器家族；`clang` / `gcc` 仅设置宿主工具链的默认二进制名称；`ctng` 使用本地构建的 crosstool-ng 工具链，按目标存放在 `.buildtools/ctng/<target>`；linux64 与 linuxarm64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC，耗时较长。构建工具链时使用 `./native/setup.sh --with-ctng --ctng-target <目标>`；`linuxarm64` 需安装 qemu-user 以运行产物（`--install` 会一并安装）。  
 > `FFBUILD_CC` / `CC`（以及 `CXX`、`LD`、`AR` 等）可覆盖上述选择，也可指向带版本号的编译器（如 `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`）。  
 > 追加编译选项使用 `FFBUILD_EXTRA_CFLAGS`、`FFBUILD_EXTRA_LDFLAGS`。  
 > 查看最终配置：`source native/env.sh && ffbuild_env_dump`。  
