@@ -90,16 +90,6 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 1. Prefer a checkout of the release branch: point `FFMPEG_REPO` at its working tree, or leave `FFMPEG_REPO` unset and select the corresponding version addin.
 2. If the archive must be used, skip the incompatible stage, for example `FFBUILD_SKIP_STAGES=openapv`. A skipped stage is also removed from FFmpeg's configure flags, so the resulting build no longer provides that feature.
 
-## win32 builds report that wine cannot run 32-bit programs
-
-**Symptoms**: `./build.sh win32 …` exits before building any dependency with `wine cannot run 32-bit Windows binaries`.
-
-**Cause**: only the 64-bit wine is installed. The meson cross file uses wine as `exe_wrapper`, and win32 target programs are 32-bit PE files; when the loader cannot start one, the first feature probe fails.
-
-**Resolution**: install 32-bit support for wine. `build.sh` compiles and runs a minimal 32-bit program before the dependency stages and exits immediately when that support is missing.
-
-> Distributions usually split 32-bit support into a separate package or require the 32-bit architecture to be enabled first; for example, Debian and Ubuntu need the `i386` architecture enabled before `wine32` can be installed. Consult the distribution for the exact package names.
-
 ## linuxarm64 artifacts do not run on the build machine
 
 **Symptoms**: running `bin/ffmpeg` directly fails with `Exec format error` or a missing dynamic loader.
@@ -121,14 +111,6 @@ QEMU_LD_PREFIX=<sysroot> qemu-aarch64 -E LD_LIBRARY_PATH=<unpacked>/lib \
 ```
 
 > Static variants do not need `LD_LIBRARY_PATH`. `setup.sh --check` only warns when `qemu-aarch64` is missing; the build itself is unaffected.
-
-## win64 builds report a missing wine
-
-**Symptoms**: `./build.sh win64 …` exits before building any dependency with `target 'win64' needs wine`; without ctng it asks for `FFBUILD_TOOLCHAIN_MODE=ctng` instead.
-
-**Cause**: win64 can only be produced by the crosstool-ng toolchain, and the meson cross file uses wine as `exe_wrapper` because configuration-time checks run target binaries (glib's feature probes, for example).
-
-**Resolution**: run `./native/setup.sh --install --with-ctng --ctng-target win64`, which installs wine and builds the win64 toolchain, then use `FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 …`. wine can also be installed separately from the distribution packages.
 
 ## Permission errors
 

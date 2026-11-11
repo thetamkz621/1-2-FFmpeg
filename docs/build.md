@@ -20,8 +20,8 @@
 |---|---|---|
 | `linux64` | host `gcc` / `clang`，或 `ctng` | 同架构原生或交叉构建 |
 | `linuxarm64` | 仅 `ctng` | 产物为 aarch64 ELF；运行需要 qemu-user，未使用 ctng 时 `build.sh` 直接退出 |
-| `win64` | 仅 `ctng` | 需要 wine；缺少 wine 或未使用 ctng 时 `build.sh` 直接退出 |
-| `win32` | 仅 `ctng` | 需要能运行 32 位程序的 wine；预检失败时 `build.sh` 直接退出 |
+| `win64` | 仅 `ctng` | 未使用 ctng 时 `build.sh` 直接退出 |
+| `win32` | 仅 `ctng` | 未使用 ctng 时 `build.sh` 直接退出 |
 
 ```bash
 # linux64，宿主工具链
@@ -59,7 +59,6 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 
 > ctng 工具链位于 `.buildtools/ctng/<target>`；linux64 与 linuxarm64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC。组件源码保存在 `.buildtools/ctng/sources` 并由各目标共用；每个目标的 ct-ng 构建树在安装完成后删除（`--keep-ctng-src` 可保留）。  
 > 裁剪在依赖构建前执行，因此 `soxr` 与 `vidstab` 按串行编译；宿主 `gcc` / `clang` 模式不受影响。  
-> Windows 目标的 meson 阶段通过 wine 运行目标程序；缺少 wine，或 `win32` 的 wine 缺少 32 位支持时，`build.sh` 在依赖构建前退出。
 
 ## 编译参数
 

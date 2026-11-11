@@ -20,8 +20,8 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 |---|---|---|
 | `linux64` | host `gcc` / `clang`, or `ctng` | native or same-architecture cross build |
 | `linuxarm64` | `ctng` only | produces aarch64 ELF; running it requires qemu-user; `build.sh` exits early without ctng |
-| `win64` | `ctng` only | requires wine; `build.sh` exits early without wine or ctng |
-| `win32` | `ctng` only | requires a wine build that can run 32-bit programs; `build.sh` exits early when the preflight check fails |
+| `win64` | `ctng` only | `build.sh` exits early when ctng is not used |
+| `win32` | `ctng` only | `build.sh` exits early when ctng is not used |
 
 ```bash
 # linux64 with the host toolchain
@@ -59,7 +59,6 @@ The target is selected by the first argument to `build.sh`; when building a tool
 
 > The ctng toolchain lives in `.buildtools/ctng/<target>`; the initial linux64 build compiles glibc and GCC, while win64 compiles mingw-w64 and GCC.  
 > Pruning runs before dependencies are built, so `soxr` and `vidstab` are compiled serially; host `gcc` and `clang` builds are unaffected.  
-> meson stages for win64 run target binaries through wine; without wine, `build.sh` exits before any dependency is built.
 
 ## Compiler flags
 
