@@ -632,6 +632,15 @@ do_check() {
                    "$(pkg_cmd perl_core)"
     fi
 
+    # 缺少 pod2man 时 FFmpeg 的 configure 关闭 manpages，构建继续，但产物不含
+    # doc/man。报告为 [warn]，因为影响范围仅限文档。
+    if command -v pod2man >/dev/null 2>&1; then
+        rt_ok "pod2man                FFmpeg man 页"
+    else
+        rt_warn "pod2man                FFmpeg man 页" \
+                 "缺失时产物不含 doc/man，构建不受影响"
+    fi
+
     # makeinfo / autopoint 由托管工具提供；没建之前不该让用户去装系统包。
     if command -v makeinfo >/dev/null 2>&1; then
         rt_ok "makeinfo (texinfo)     gmp 等 autotools 文档"
