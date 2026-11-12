@@ -5,7 +5,7 @@
 > [!NOTE]
 > Extensive use of AI agents during development.
 
-A Docker-free fork of [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds): build FFmpeg and its dependencies directly on a Linux x86_64 host.
+A Docker-free fork of [FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds): build FFmpeg and its dependencies directly on a Linux x86_64 host.
 
 The `linux64`, `linuxarm64`, `win64`, and `win32` targets are supported. `linuxarm64` and Windows targets require the crosstool-ng toolchain.
 

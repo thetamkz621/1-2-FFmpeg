@@ -5,7 +5,7 @@
 > [!NOTE]
 > 开发过程中大量使用 AI agent。
 
-基于 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的去 Docker 化版本：直接在 Linux x86_64 主机上构建 FFmpeg 及其依赖。
+基于 [FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds) 的去 Docker 化版本：直接在 Linux x86_64 主机上构建 FFmpeg 及其依赖。
 
 支持 `linux64`、`linuxarm64`、`win64` 与 `win32` 目标。`linuxarm64` 与 Windows 目标只能使用 crosstool-ng 工具链。
 
