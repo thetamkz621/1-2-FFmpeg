@@ -31,12 +31,37 @@ export RAW_LDFLAGS="$LDFLAGS"
 [[ -n "${STAGE_CXXFLAGS:-}" ]] && export CXXFLAGS="$CXXFLAGS $STAGE_CXXFLAGS"
 [[ -n "${STAGE_LDFLAGS:-}"  ]] && export LDFLAGS="$LDFLAGS $STAGE_LDFLAGS"
 
+# A cache produced by a stage that runs autoreconf during its download step
+# carries absolute symlinks to the generating host's automake, libtool and
+# autoconf (config.sub, ltmain.sh, m4/libtool.m4, ...). After the cache moves to
+# another host or repository path those links dangle, and aclocal stops with
+# "file 'm4/lt~obsolete.m4' does not exist" before autoreconf can reinstall
+# them. Replace a link with the file it points at when that target exists here;
+# otherwise drop it so the stage's own autoreconf installs a fresh copy.
+ffbuild_materialise_absolute_links() {
+    local root="$1" link target tmp
+    while IFS= read -r -d '' link; do
+        target="$(readlink "$link")"
+        [[ "$target" == /* ]] || continue
+        tmp="$link.ffbuild-tmp"
+        rm -rf "$tmp"
+        if cp -RL -- "$link" "$tmp" 2>/dev/null; then
+            rm -f "$link"
+            mv -f "$tmp" "$link"
+        else
+            rm -rf "$tmp"
+            rm -f "$link"
+        fi
+    done < <(find "$root" -type l -print0)
+}
+
 if [[ -n "${STAGENAME:-}" && -n "${FFBUILD_STAGE_ROOT:-}" ]]; then
     STAGE_DIR="$FFBUILD_STAGE_ROOT/$STAGENAME"
     rm -rf "$STAGE_DIR"
     mkdir -p "$STAGE_DIR"
     if [[ -n "${STAGE_CACHE:-}" && -f "$STAGE_CACHE" ]]; then
         tar xaf "$STAGE_CACHE" -C "$STAGE_DIR"
+        ffbuild_materialise_absolute_links "$STAGE_DIR"
     fi
     cd "$STAGE_DIR"
 fi
