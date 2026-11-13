@@ -341,7 +341,7 @@ PKG_KEYS_EXTRA=(
     lcov lld qemu_user multilib
     # 自建 libtool 只装 libtool / libtoolize，ltdl 头文件仍由发行版提供
     libltdl
-    # install-doc 的 HTML 通道；缺了 build.sh 只告警
+    # 上游 base 镜像的包；HTML 文档由 makeinfo 生成，此项只为清单对齐
     texi2html
     # 上游装 nodesource 的 nodejs 与 python3-apt；仓库内零引用，保持能力对齐
     python3_apt nodejs

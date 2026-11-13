@@ -383,9 +383,10 @@ echo "== configuring ffmpeg =="
 
 echo "== building ffmpeg =="
 make -j"$FFBUILD_JOBS" V=1
-make install
-# Docs are best-effort: texi2html may be unavailable on some distros.
-make install-doc || echo "WARNING: 'make install-doc' failed; documentation may be incomplete" >&2
+# Page types are configure-time decisions: man pages need pod2man, HTML needs
+# makeinfo or texi2html. A disabled type is an empty target, so a failure here
+# is a real generation error.
+make install install-doc
 cd "$FFBUILD_REPO_ROOT"
 
 # =============================================================== packaging ===
