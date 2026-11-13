@@ -77,7 +77,7 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 | 变量 | 作用 |
 |---|---|
 | `FFBUILD_CLEAN=1` | 构建前清空 `FFBUILD_ROOT`（**⚠️ 谨慎使用**） |
-| `FFBUILD_FORCE=1` | 忽略断点续建状态，重建全部 stage |
+| `FFBUILD_FORCE=1` | 清空 `prefix/`、`state/` 与 `destdir/` 后重建全部阶段（**⚠️ 丢弃已构建的依赖**） |
 | `FFBUILD_DEPS_ONLY=1` | 仅构建依赖，不构建 FFmpeg |
 | `FFBUILD_FFMPEG_ONLY=1` | 跳过依赖，复用现有 prefix |
 | `FFBUILD_SKIP_DOWNLOAD=1` | 不刷新下载缓存 |
@@ -88,6 +88,11 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 | `FFBUILD_EXTRA_VERSION=<str>` | 传递给 FFmpeg 的 `--extra-version`，默认 `YYYYMMDD`；影响 `ffmpeg -version` 输出，不影响产物名称 |
 
 构建根使用 `<target>:<compiler>` 标记。host 与 ctng、以及不同目标之间不能共用一个构建根；切换时使用独立的 `FFBUILD_ROOT`，或设置 `FFBUILD_CLEAN=1`。
+
+复用构建根有前提：当前构建需要的每个阶段都必须已有标记，且标记记录的输入指纹（阶段脚本、补丁、取源版本、编译器与编译参数）与当前一致；仍需补建阶段时，已建部分必须正好排在补建部分之前。任一条件不满足，构建会停止并说明原因，不会在已有前缀上补建。按提示以 `FFBUILD_FORCE=1` 从空前缀重建，或为该组合使用独立的 `FFBUILD_ROOT`。
+
+> `FFBUILD_FFMPEG_ONLY=1` 沿用同一前提：依赖缺失或输入已变时报错，它不会重建依赖。
+> 许可证变体之间只有在前缀已完整时可直接复用（例如 nonfree 构建完成后切到 gpl）；反向通常需要重建，因为新增阶段排在已建阶段之前。shared 与 static 之间不受影响。
 
 ## FFmpeg 源码
 

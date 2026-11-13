@@ -90,6 +90,19 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 1. Prefer a checkout of the release branch: point `FFMPEG_REPO` at its working tree, or leave `FFMPEG_REPO` unset and select the corresponding version addin.
 2. If the archive must be used, skip the incompatible stage, for example `FFBUILD_SKIP_STAGES=openapv`. A skipped stage is also removed from FFmpeg's configure flags, so the resulting build no longer provides that feature.
 
+## The build root cannot be reused
+
+**Symptom**: the build stops after `== resolving dependency graph ==` and names a stage together with `the prefix cannot be reused`, `has no input fingerprint`, `is built, but stage` or `does not use`.
+
+**Cause**: `prefix/` is the product of one stage set built from one set of inputs, and every dependency's configure probes the whole prefix. The prefix stops matching the current build when any of the following applies:
+
+- a stage script, a patch or the source revision changed after the build, so the fingerprint recorded in the marker differs;
+- the FFmpeg version, addins or compile flags changed;
+- a marker was deleted by hand, or a previous run was interrupted while copying a stage into the prefix;
+- the markers were written by an older `build.sh` and carry no fingerprint.
+
+**Fix**: rebuild with `FFBUILD_FORCE=1` as the message says. It clears `prefix/`, `state/` and `destdir/` and rebuilds every stage from scratch; the toolchain under `.buildtools/`, the download cache in the repository and `artifacts/` are left alone. If two variants must be produced alternately (for example gpl and nonfree), give each its own `FFBUILD_ROOT` instead of rebuilding everything on every switch.
+
 ## linuxarm64 artifacts do not run on the build machine
 
 **Symptoms**: running `bin/ffmpeg` directly fails with `Exec format error` or a missing dynamic loader.

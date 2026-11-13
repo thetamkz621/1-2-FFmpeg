@@ -123,15 +123,25 @@ if [[ -d "${FFBUILD_DESTDIR:-}" ]]; then
     # has been built and before FFmpeg is installed, so FFmpeg's own bin/ and
     # man1/ are unaffected.
     #
-    # --remove-destination is load-bearing: this merge runs again whenever a
-    # completed stage is rebuilt (e.g. after deleting its ffbuild/state marker),
-    # and plain `cp -l` refuses to replace a destination that already exists —
-    # it goes straight to link() and fails with EEXIST, which leaves the *old*
-    # files in place while the command exits non-zero. cp -a is the fallback for
-    # a cross-device destination, where hard links are impossible.
+    # --remove-destination is load-bearing: later stages and sibling scripts of
+    # the same directory stage install over files an earlier one already merged,
+    # and plain `cp -l` refuses to replace an existing destination — it goes
+    # straight to link() and fails with EEXIST, which leaves the *old* file in
+    # place while the command exits non-zero. cp -a is the fallback for a
+    # cross-device destination, where hard links are impossible.
+    #
+    # The sentinel marks the prefix as being modified. A copy interrupted here
+    # leaves an unknown part of the stage behind, which re-running the stage
+    # cannot repair; build.sh refuses to continue while the file exists.
     if [[ -d "$FFBUILD_DESTPREFIX" ]]; then
+        if [[ -n "${STAGE_KEY:-${STAGENAME:-}}" && -n "${FFBUILD_STATE:-}" ]]; then
+            : > "$FFBUILD_STATE/.merging.${STAGE_KEY:-${STAGENAME:-}}"
+        fi
         cp -al --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/ ||
             cp -a --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/
+        if [[ -n "${STAGE_KEY:-${STAGENAME:-}}" && -n "${FFBUILD_STATE:-}" ]]; then
+            rm -f "$FFBUILD_STATE/.merging.${STAGE_KEY:-${STAGENAME:-}}"
+        fi
     fi
 fi
 

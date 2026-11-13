@@ -15,7 +15,7 @@
 #   FFBUILD_FFMPEG_ONLY=1   skip dependencies (reuse existing prefix)
 #   FFBUILD_SKIP_DOWNLOAD=1 do not refresh the download cache
 #   FFBUILD_CLEAN=1         wipe FFBUILD_ROOT before building
-#   FFBUILD_FORCE=1         rebuild all stages (ignore resume state)
+#   FFBUILD_FORCE=1         discard prefix/state and rebuild every stage
 #   CC/CXX/LDFLAGS/...      compiler & flag overrides (see native/env.sh)
 #
 set -eo pipefail
@@ -108,6 +108,15 @@ win32|win64)
     ;;
 esac
 
+# Both options empty the prefix that FFMPEG_ONLY reuses, so the combination is
+# contradictory rather than merely redundant.
+if [[ -n "${FFBUILD_FFMPEG_ONLY:-}" && \
+      -n "${FFBUILD_FORCE:-}${FFBUILD_CLEAN:-}" ]]; then
+    echo "build.sh: FFBUILD_FFMPEG_ONLY cannot be combined with FFBUILD_FORCE or FFBUILD_CLEAN" >&2
+    echo "          they empty the prefix that FFBUILD_FFMPEG_ONLY is asked to reuse" >&2
+    exit 2
+fi
+
 if [[ -n "${FFBUILD_CLEAN:-}" ]]; then
     echo "== cleaning $FFBUILD_ROOT =="
     rm -rf "$FFBUILD_ROOT"
@@ -116,7 +125,7 @@ fi
 mkdir -p "$FFBUILD_ROOT"/{prefix,destdir,work,log}
 FFBUILD_STAGE_ROOT="$FFBUILD_ROOT/work/stages"
 FFBUILD_STATE="$FFBUILD_ROOT/state"
-export FFBUILD_STAGE_ROOT
+export FFBUILD_STAGE_ROOT FFBUILD_STATE
 mkdir -p "$FFBUILD_STATE"
 
 # Guard against concurrent builds sharing the same FFBUILD_ROOT: two runs would
@@ -168,6 +177,52 @@ if [[ -n "${FFBUILD_COMPILER:-}" ]]; then
     unset _prev_compiler _prev_raw
 fi
 
+# Reuse is only sound when the prefix holds exactly the stages that precede the
+# first stage still to build: every configure in this tree probes the prefix as a
+# whole. Clearing it is therefore how a rebuild starts, rather than re-running
+# stages on top of their own output (glib's libintl probe, freetype finding
+# brotli) and silently changing the result.
+ffbuild_discard_prefix() {
+    local root="${FFBUILD_ROOT%/}" parent
+    parent="${root#/}"
+    if [[ -z "$root" || "$root" != /* || "$parent" != */* ]]; then
+        echo "build.sh: refusing to clear FFBUILD_ROOT='$FFBUILD_ROOT'" >&2
+        exit 1
+    fi
+    if [[ "$FFBUILD_PREFIX" != "$root/prefix" ||
+          "$FFBUILD_STATE" != "$root/state" ||
+          "$FFBUILD_DESTDIR" != "$root/destdir" ]]; then
+        echo "build.sh: refusing to clear an unexpected layout under $root" >&2
+        exit 1
+    fi
+    if [[ -L "$FFBUILD_PREFIX" ]]; then
+        echo "build.sh: $FFBUILD_PREFIX is a symlink; remove it manually before rebuilding" >&2
+        exit 1
+    fi
+    if [[ -d "$FFBUILD_PREFIX" ]]; then
+        echo "   dropping $FFBUILD_PREFIX ($(du -sh "$FFBUILD_PREFIX" 2>/dev/null | cut -f1))"
+    fi
+    rm -rf "$FFBUILD_PREFIX" "$FFBUILD_STATE" "$FFBUILD_DESTDIR"
+    mkdir -p "$FFBUILD_PREFIX" "$FFBUILD_STATE" "$FFBUILD_DESTDIR"
+}
+
+if [[ -n "${FFBUILD_FORCE:-}" ]]; then
+    echo "== discarding the prefix and stage state =="
+    ffbuild_discard_prefix
+fi
+
+# A .merging.<stage> sentinel is written just before a stage's files are copied
+# into the prefix and removed afterwards. A leftover means that copy was
+# interrupted, so the prefix holds an unknown part of the stage; re-running the
+# stage cannot repair it.
+for _merging in "$FFBUILD_STATE"/.merging.*; do
+    [[ -e "$_merging" ]] || continue
+    echo "build.sh: the previous run was interrupted while merging ${_merging##*/.merging.}" >&2
+    echo "          the prefix may hold an incomplete stage; rebuild it with FFBUILD_FORCE=1" >&2
+    exit 1
+done
+unset _merging
+
 FFMPEG_REPO="${FFMPEG_REPO:-https://github.com/FFmpeg/FFmpeg.git}"
 GIT_BRANCH="${GIT_BRANCH:-master}"
 GIT_BRANCH="${GIT_BRANCH_OVERRIDE:-$GIT_BRANCH}"
@@ -218,19 +273,6 @@ run_one_script() {
     local STAGENAME
     STAGENAME="$(basename "$SCRIPT" .sh)"
 
-    # Resumability: a full linux64/gpl dependency build takes a long time, and
-    # re-running after a late failure must not redo everything. Stages that
-    # already completed are skipped unless FFBUILD_FORCE is set.
-    if [[ -z "${FFBUILD_FORCE:-}" && -f "$FFBUILD_STATE/${STAGENAME}.done" ]]; then
-        echo "   (already built: $STAGENAME)"
-        return 0
-    fi
-
-    if ! script_enabled "$SCRIPT"; then
-        echo "-- skip (not applicable to $TARGET/$VARIANT): $SCRIPT"
-        return 0
-    fi
-
     local CACHE="$FFBUILD_REPO_ROOT/.cache/downloads/${STAGENAME}.tar.xz"
     [[ -f "$CACHE" ]] || CACHE=""
 
@@ -249,12 +291,19 @@ run_one_script() {
     mkdir -p "$FFBUILD_DESTDIR" "$FFBUILD_PREFIX"
 
     if ! SELF="$SCRIPT" STAGENAME="$STAGENAME" STAGE_CACHE="$CACHE" \
+            STAGE_KEY="$(stage_key "$SCRIPT")" \
             bash util/run_stage.sh "$SCRIPT"; then
         echo "ERROR: stage $STAGENAME failed; not marking it done" >&2
         return 1
     fi
 
-    touch "$FFBUILD_STATE/${STAGENAME}.done"
+    # The marker records what the stage was built from, so the next run can tell
+    # "already built from these inputs" from "built from others". Write it under
+    # a temporary name first: a half-written marker must not look valid.
+    stage_fingerprint "$SCRIPT" > "$FFBUILD_STATE/$(stage_key "$SCRIPT").done.tmp"
+    mv -f "$FFBUILD_STATE/$(stage_key "$SCRIPT").done.tmp" \
+        "$FFBUILD_STATE/$(stage_key "$SCRIPT").done"
+    printf '%s\n' "$(stage_key "$SCRIPT")" >> "$FFBUILD_STATE/.built"
 }
 
 # Derive the src dir of a stage's `--mount=src=<x>,dst=/patches` declaration.
@@ -275,14 +324,118 @@ stage_patch_src() {
     sed -n 's/.*--mount=src=\([^,]*\),dst=\/patches.*/\1/p' <<<"$out" | head -n1
 }
 
-build_deps() {
-    local ENTRY ORDER STAGE SCRIPT
+# --- stage input fingerprints ----------------------------------------------
+# A .done marker says which inputs produced the files a stage installed. Reuse is
+# allowed only while those inputs are unchanged: the prefix is the product of one
+# (stage set, inputs) pair, and every configure in this tree probes the whole
+# prefix. Markers written before fingerprints existed are empty and count as
+# unusable rather than as "built from anything".
+declare -A FFBUILD_STAGE_STATE=()
+FFBUILD_ENV_FP=""
+
+ffbuild_env_fp() {
+    local cc_ver cxx_ver f canon
+    cc_ver="$("${CC:-cc}" --version 2>/dev/null | head -n 1)"
+    cxx_ver="$("${CXX:-c++}" --version 2>/dev/null | head -n 1)"
+    canon="$(
+        {
+            printf 'label %s\n' "${FFBUILD_TARGET}:${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}}"
+            printf 'cc %s\n' "$cc_ver"
+            printf 'cxx %s\n' "$cxx_ver"
+            printf 'cflags %s\n' "${CFLAGS-}"
+            printf 'cxxflags %s\n' "${CXXFLAGS-}"
+            printf 'ldflags %s\n' "${LDFLAGS-}"
+            printf 'ldexeflags %s\n' "${LDEXEFLAGS-}"
+            printf 'stage_cflags %s\n' "${STAGE_CFLAGS-}"
+            printf 'stage_cxxflags %s\n' "${STAGE_CXXFLAGS-}"
+            printf 'stage_ldflags %s\n' "${STAGE_LDFLAGS-}"
+            printf 'addins %s\n' "${ADDINS_STR-}"
+            printf 'ffver %s\n' "${FFVER-}"
+            for f in "$FFBUILD_TARGET_CONF" util/run_stage.sh util/dl_functions.sh util/vars.sh; do
+                printf 'file %s %s\n' "$f" "$(sha256sum "$f" | cut -d' ' -f1)"
+            done
+        }
+    )"
+    sha256sum <<<"$canon" | cut -d' ' -f1
+}
+
+# The download cache is keyed by a hash of the fetch recipe and its symlink is
+# refreshed on every run, so the name is the source identity without fetching.
+ffbuild_source_fp() {
+    local name="$1" link="$FFBUILD_REPO_ROOT/.cache/downloads/${1}.tar.xz" target
+    if [[ -L "$link" ]]; then
+        target="$(readlink "$link")"
+        target="${target#"${name}"_}"
+        printf '%s' "${target%.tar.xz}"
+    else
+        printf '%s' '-'
+    fi
+}
+
+ffbuild_patches_fp() {
+    local src="$1"
+    if [[ -z "$src" || ! -d "$src" ]]; then
+        printf '%s' '-'
+        return 0
+    fi
+    find "$src" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1
+}
+
+stage_fingerprint() {
+    local SCRIPT="$1" name
+    name="$(basename "$SCRIPT" .sh)"
+    printf 'script %s\n' "$(sha256sum "$SCRIPT" | cut -d' ' -f1)"
+    printf 'source %s\n' "$(ffbuild_source_fp "$name")"
+    printf 'patches %s\n' "$(ffbuild_patches_fp "$(stage_patch_src "$SCRIPT")")"
+    if [[ -z "$FFBUILD_ENV_FP" ]]; then
+        FFBUILD_ENV_FP="$(ffbuild_env_fp)"
+    fi
+    printf 'env %s\n' "$FFBUILD_ENV_FP"
+}
+
+# Markers and logs are keyed by the script path, not by its basename:
+# 99-finalize.sh exists in both 45-x11 and 50-vaapi, and a shared key would make
+# the second one look built and skip its finalize step.
+stage_key() {
+    local p="${1#scripts.d/}"
+    p="${p%.sh}"
+    printf '%s' "${p//\//__}"
+}
+
+# Echo one of: ok | missing | legacy | stale:<component>. Cached per script: the
+# patch lookup sources the stage script, and the answer is used twice per run.
+stage_state() {
+    local SCRIPT="$1" marker key want got
+    if [[ -n "${FFBUILD_STAGE_STATE[$SCRIPT]:-}" ]]; then
+        STAGE_STATE="${FFBUILD_STAGE_STATE[$SCRIPT]}"
+        return 0
+    fi
+    marker="$FFBUILD_STATE/$(stage_key "$SCRIPT").done"
+    if [[ ! -f "$marker" ]]; then
+        FFBUILD_STAGE_STATE[$SCRIPT]="missing"
+    elif ! grep -q '^script ' "$marker"; then
+        FFBUILD_STAGE_STATE[$SCRIPT]="legacy"
+    else
+        while read -r key want; do
+            got="$(sed -n "s/^${key} //p" "$marker" | head -n 1)"
+            if [[ "$got" != "$want" ]]; then
+                FFBUILD_STAGE_STATE[$SCRIPT]="stale:${key}"
+                break
+            fi
+        done < <(stage_fingerprint "$SCRIPT")
+        FFBUILD_STAGE_STATE[$SCRIPT]="${FFBUILD_STAGE_STATE[$SCRIPT]:-ok}"
+    fi
+    STAGE_STATE="${FFBUILD_STAGE_STATE[$SCRIPT]}"
+}
+
+# Ordered stage scripts this run would build, after the skip list and
+# ffbuild_enabled. Sets PLAN; only the verbose form prints the skip reasons.
+PLAN=()
+resolve_plan() {
+    local verbose="${1:-}" ENTRY ORDER STAGE SCRIPT
     ENTRY="$(ffbuild_entry_script)"
-
-    echo "== resolving dependency graph =="
     ORDER="$(get_build_order "$ENTRY")"
-    echo "   $(wc -l <<<"$ORDER") stages in dependency order"
-
+    PLAN=()
     for STAGE in $ORDER; do
         # The graph entry is the aggregator zz-final.sh: it contributes
         # dependencies but builds nothing, and it is reached here as a *path*
@@ -290,7 +443,9 @@ build_deps() {
         # report it as skipped. Leave it out instead of printing noise.
         [[ "$STAGE" == "$ENTRY" ]] && continue
         if ffbuild_stage_skipped "$STAGE"; then
-            echo "-- skip (FFBUILD_SKIP_STAGES): $STAGE"
+            if [[ -n "$verbose" ]]; then
+                echo "-- skip (FFBUILD_SKIP_STAGES): $STAGE"
+            fi
             continue
         fi
         # A stage can be off for reasons other than the target: the license
@@ -299,20 +454,178 @@ build_deps() {
         # thing, so state what it is not applicable *to* and leave the reason to
         # the stage itself.
         if ! ffbuild_stage_enabled "$STAGE"; then
-            echo "-- skip (not applicable to $TARGET/$VARIANT): $STAGE"
+            if [[ -n "$verbose" ]]; then
+                echo "-- skip (not applicable to $TARGET/$VARIANT): $STAGE"
+            fi
             continue
         fi
         while IFS= read -r SCRIPT; do
             [[ -n "$SCRIPT" ]] || continue
-            echo "-- build: $SCRIPT"
-            run_one_script "$SCRIPT" 2>&1 | tee "$FFBUILD_LOG/$(basename "$SCRIPT" .sh).log"
+            if ! script_enabled "$SCRIPT"; then
+                if [[ -n "$verbose" ]]; then
+                    echo "-- skip (not applicable to $TARGET/$VARIANT): $SCRIPT"
+                fi
+                continue
+            fi
+            PLAN+=("$SCRIPT")
         done < <(ffbuild_stage_scripts "$STAGE")
     done
 }
 
+# Every built stage is also recorded in state/.built. The ledger is what makes a
+# deleted marker visible: without it the last stage in the plan is indistinguish-
+# able from one that was never built, and would be rebuilt on top of its own
+# files, which is the situation this whole check exists to prevent.
+check_stage_ledger() {
+    local key
+    if [[ ! -f "$FFBUILD_STATE/.built" ]]; then
+        return 0
+    fi
+    while IFS= read -r key; do
+        [[ -n "$key" ]] || continue
+        if [[ ! -f "$FFBUILD_STATE/${key}.done" ]]; then
+            echo "build.sh: stage ${key//__//} was built but its state marker is missing" >&2
+            echo "          the prefix still contains its files; rebuild it with FFBUILD_FORCE=1" >&2
+            return 1
+        fi
+    done < "$FFBUILD_STATE/.built"
+    return 0
+}
+
+# Sound reuse needs the prefix to hold exactly the stages that precede the first
+# stage still to build: a stage inserted before an already built one would
+# configure against libraries a from-scratch build would not have installed yet,
+# and changed inputs leave the dependents built against the old copy.
+check_prefix_reuse() {
+    local i SCRIPT state name first_missing=-1 marker foreign=()
+    local -A in_plan=()
+    for SCRIPT in "${PLAN[@]}"; do
+        in_plan["$(stage_key "$SCRIPT")"]=1
+    done
+
+    for i in "${!PLAN[@]}"; do
+        SCRIPT="${PLAN[i]}"
+        name="$(basename "$SCRIPT" .sh)"
+        stage_state "$SCRIPT"
+        state="$STAGE_STATE"
+        case "$state" in
+        ok) ;;
+        missing)
+            if [[ $first_missing -lt 0 ]]; then
+                first_missing=$i
+            fi
+            continue
+            ;;
+        legacy)
+            echo "build.sh: stage $name has no input fingerprint (built by an older build.sh)" >&2
+            echo "          the prefix cannot be reused; rebuild it with FFBUILD_FORCE=1" >&2
+            return 1
+            ;;
+        stale:*)
+            echo "build.sh: stage $name was built with different inputs (${state#stale:} changed)" >&2
+            echo "          the prefix cannot be reused; rebuild it with FFBUILD_FORCE=1" >&2
+            return 1
+            ;;
+        esac
+        if [[ $first_missing -ge 0 ]]; then
+            echo "build.sh: stage $name is built, but stage $(basename "${PLAN[first_missing]}" .sh) before it is not" >&2
+            echo "          rebuilding it inside a populated prefix changes what configure probes" >&2
+            echo "          rebuild from an empty prefix with FFBUILD_FORCE=1, or use a separate FFBUILD_ROOT" >&2
+            return 1
+        fi
+    done
+
+    if [[ $first_missing -lt 0 ]]; then
+        return 0
+    fi
+
+    for marker in "$FFBUILD_STATE"/*.done; do
+        [[ -e "$marker" ]] || continue
+        name="$(basename "$marker" .done)"
+        if [[ -z "${in_plan[$name]:-}" ]]; then
+            foreign+=("$name")
+        fi
+    done
+    if (( ${#foreign[@]} )); then
+        echo "build.sh: the prefix contains stages that this build does not use: ${foreign[*]}" >&2
+        echo "          they belong to another variant; other stages still need building, so" >&2
+        echo "          their configure would run against the extra files in the prefix" >&2
+        echo "          rebuild from an empty prefix with FFBUILD_FORCE=1, or use a separate FFBUILD_ROOT" >&2
+        return 1
+    fi
+    return 0
+}
+
+build_deps() {
+    local i SCRIPT state
+    echo "== resolving dependency graph =="
+    FFBUILD_ENV_FP="${FFBUILD_ENV_FP:-$(ffbuild_env_fp)}"
+    if ! check_stage_ledger; then
+        exit 1
+    fi
+    resolve_plan verbose
+    echo "   ${#PLAN[@]} stage scripts in dependency order"
+    if ! check_prefix_reuse; then
+        exit 1
+    fi
+
+    for i in "${!PLAN[@]}"; do
+        SCRIPT="${PLAN[i]}"
+        stage_state "$SCRIPT"
+        state="$STAGE_STATE"
+        if [[ "$state" == "ok" ]]; then
+            echo "   (already built: $(basename "$SCRIPT" .sh))"
+            continue
+        fi
+        echo "-- build: $SCRIPT"
+        run_one_script "$SCRIPT" 2>&1 | tee "$FFBUILD_LOG/$(stage_key "$SCRIPT").log"
+    done
+}
+
+# FFBUILD_FFMPEG_ONLY rebuilds nothing, so the prefix must already hold every
+# stage this invocation needs, built from the current inputs.
+check_prefix_complete() {
+    local i SCRIPT state list missing=() unusable=()
+    FFBUILD_ENV_FP="${FFBUILD_ENV_FP:-$(ffbuild_env_fp)}"
+    if ! check_stage_ledger; then
+        exit 1
+    fi
+    resolve_plan
+    for i in "${!PLAN[@]}"; do
+        SCRIPT="${PLAN[i]}"
+        stage_state "$SCRIPT"
+        state="$STAGE_STATE"
+        case "$state" in
+        ok) ;;
+        missing) missing+=("$(basename "$SCRIPT" .sh)") ;;
+        legacy)  unusable+=("$(basename "$SCRIPT" .sh) (no fingerprint)") ;;
+        stale:*) unusable+=("$(basename "$SCRIPT" .sh) (${state#stale:} changed)") ;;
+        esac
+    done
+    if (( ${#missing[@]} )); then
+        list="$(printf '%s\n' "${missing[@]}" | head -n 10 | tr '\n' ' ')"
+        echo "build.sh: the prefix is missing ${#missing[@]} enabled stages: $list" >&2
+    fi
+    if (( ${#unusable[@]} )); then
+        echo "build.sh: the prefix holds stages built with different inputs: ${unusable[*]}" >&2
+    fi
+    if (( ${#missing[@]} || ${#unusable[@]} )); then
+        echo "          FFBUILD_FFMPEG_ONLY only reuses a complete prefix" >&2
+        echo "          rebuild the dependencies without it, using FFBUILD_FORCE=1" >&2
+        exit 1
+    fi
+    if [[ ! -d "$FFBUILD_PREFIX" ]] || [[ -z "$(ls -A "$FFBUILD_PREFIX" 2>/dev/null)" ]]; then
+        echo "build.sh: $FFBUILD_PREFIX is empty; nothing for FFBUILD_FFMPEG_ONLY to reuse" >&2
+        exit 1
+    fi
+}
+
+
 echo "== toolchain: ${FFBUILD_COMPILER_LABEL:-${FFBUILD_COMPILER:-unknown}} (CC=${CC:-?} CXX=${CXX:-?}, mode=${FFBUILD_TOOLCHAIN_MODE:-?}) =="
 
-if [[ -z "${FFBUILD_FFMPEG_ONLY:-}" ]]; then
+if [[ -n "${FFBUILD_FFMPEG_ONLY:-}" ]]; then
+    check_prefix_complete
+else
     build_deps
     echo "== dependencies done =="
     if [[ -n "${FFBUILD_DEPS_ONLY:-}" ]]; then

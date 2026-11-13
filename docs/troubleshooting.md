@@ -89,6 +89,19 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 1. 优先使用发布分支的检出：将 `FFMPEG_REPO` 指向该分支的工作树，或不设置 `FFMPEG_REPO` 并使用对应的版本附加项。
 2. 必须使用该源码包时，跳过不兼容的阶段，例如 `FFBUILD_SKIP_STAGES=openapv`。被跳过的阶段同时从 FFmpeg 的 configure 参数中移除，产物不再包含对应功能。
 
+## 构建根无法复用
+
+**症状**：构建在 `== resolving dependency graph ==` 之后停止，报错指出某个阶段，并带有 `the prefix cannot be reused`、`has no input fingerprint`、`is built, but stage` 或 `does not use`。
+
+**原因**：`prefix/` 是某一组阶段在某一组输入下的产物，而每个依赖的 configure 都会探测整个前缀。以下情况都会使前缀与当前构建不符：
+
+- 阶段脚本、补丁或取源版本在构建后发生变化，标记记录的输入指纹与当前不同；
+- 更换 FFmpeg 版本、addin 或编译参数；
+- 手工删除了 `state/` 中的标记，或上次构建在把阶段产物复制进前缀时被中断；
+- 标记由更早版本的 `build.sh` 写入，不含输入指纹。
+
+**处理**：按提示以 `FFBUILD_FORCE=1` 重建。该选项清空构建根的 `prefix/`、`state/` 与 `destdir/`，全部阶段从头构建；`.buildtools/` 中的工具链、仓库内的下载缓存与 `artifacts/` 不受影响。若两类产物需要交替构建（例如 gpl 与 nonfree），分别指定 `FFBUILD_ROOT`，避免每次切换都全量重建。
+
 ## 无法在构建机上直接运行 linuxarm64 产物
 
 **症状**：直接执行 `bin/ffmpeg` 报 `Exec format error`，或提示找不到动态链接器。

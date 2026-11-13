@@ -76,7 +76,7 @@ The target is selected by the first argument to `build.sh`; when building a tool
 | Variable | Meaning |
 |---|---|
 | `FFBUILD_CLEAN=1` | remove `FFBUILD_ROOT` before building (**⚠️ use with caution**) |
-| `FFBUILD_FORCE=1` | rebuild every stage, ignoring resume state |
+| `FFBUILD_FORCE=1` | clear `prefix/`, `state/` and `destdir/`, then rebuild every stage (**⚠️ discards built dependencies**) |
 | `FFBUILD_DEPS_ONLY=1` | build dependencies only; do not build FFmpeg |
 | `FFBUILD_FFMPEG_ONLY=1` | skip dependencies and reuse the existing prefix |
 | `FFBUILD_SKIP_DOWNLOAD=1` | do not refresh the download cache |
@@ -87,6 +87,11 @@ The target is selected by the first argument to `build.sh`; when building a tool
 | `FFBUILD_EXTRA_VERSION=<str>` | passed to FFmpeg as `--extra-version`, default `YYYYMMDD`; affects `ffmpeg -version` output, not the artifact name |
 
 The build root is stamped with `<target>:<compiler>`. A host build and a ctng build, or two different targets, cannot share one root; use a separate `FFBUILD_ROOT` or set `FFBUILD_CLEAN=1` when switching.
+
+Reusing a build root has preconditions: every stage the current build needs must carry a marker whose recorded input fingerprint (stage script, patches, source revision, compiler and compile flags) still matches, and when stages remain to be built, the marked stages must be exactly those that precede them. If either condition fails, the build stops and explains why instead of building on top of the existing prefix. Follow the message: rebuild from an empty prefix with `FFBUILD_FORCE=1`, or use a separate `FFBUILD_ROOT` for that combination.
+
+> `FFBUILD_FFMPEG_ONLY=1` relies on the same preconditions: it reports an error when a dependency is missing or was built from different inputs, and never rebuilds dependencies.
+> License variants can share a prefix directly only once it is complete (for example, switching from a finished nonfree build to gpl); the opposite direction usually needs a rebuild, because the added stages precede stages already built. shared and static are unaffected.
 
 ## FFmpeg source
 
