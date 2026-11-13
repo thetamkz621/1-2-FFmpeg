@@ -1,3 +1,21 @@
+From: Rainist7heta <thetamkz621@outlook.com>
+Date: Fri, 16 Oct 2026 12:17:33 +0800
+Subject: [PATCH] lcevcdec: report the C++ runtime actually in use
+
+CMakeInstall.cmake probes for libc++ by compiling both branches of an #if,
+so the check succeeds regardless of the standard library and the generated
+pkg-config file always records -lc++. Debian's clang builds against libstdc++,
+where FFmpeg's lcevc_dec >= 4.0.0 probe then fails to link.
+
+Make the non-libc++ branch fail at compile time so the probe reports the
+runtime that is actually in use.
+
+---
+ cmake/modules/CMakeInstall.cmake | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/cmake/modules/CMakeInstall.cmake b/cmake/modules/CMakeInstall.cmake
+index 5d7fba1..12fe5a9 100644
 --- a/cmake/modules/CMakeInstall.cmake
 +++ b/cmake/modules/CMakeInstall.cmake
 @@ -43,11 +43,10 @@

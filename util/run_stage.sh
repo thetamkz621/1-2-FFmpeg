@@ -31,12 +31,37 @@ export RAW_LDFLAGS="$LDFLAGS"
 [[ -n "${STAGE_CXXFLAGS:-}" ]] && export CXXFLAGS="$CXXFLAGS $STAGE_CXXFLAGS"
 [[ -n "${STAGE_LDFLAGS:-}"  ]] && export LDFLAGS="$LDFLAGS $STAGE_LDFLAGS"
 
+# A cache produced by a stage that runs autoreconf during its download step
+# carries absolute symlinks to the generating host's automake, libtool and
+# autoconf (config.sub, ltmain.sh, m4/libtool.m4, ...). After the cache moves to
+# another host or repository path those links dangle, and aclocal stops with
+# "file 'm4/lt~obsolete.m4' does not exist" before autoreconf can reinstall
+# them. Replace a link with the file it points at when that target exists here;
+# otherwise drop it so the stage's own autoreconf installs a fresh copy.
+ffbuild_materialise_absolute_links() {
+    local root="$1" link target tmp
+    while IFS= read -r -d '' link; do
+        target="$(readlink "$link")"
+        [[ "$target" == /* ]] || continue
+        tmp="$link.ffbuild-tmp"
+        rm -rf "$tmp"
+        if cp -RL -- "$link" "$tmp" 2>/dev/null; then
+            rm -f "$link"
+            mv -f "$tmp" "$link"
+        else
+            rm -rf "$tmp"
+            rm -f "$link"
+        fi
+    done < <(find "$root" -type l -print0)
+}
+
 if [[ -n "${STAGENAME:-}" && -n "${FFBUILD_STAGE_ROOT:-}" ]]; then
     STAGE_DIR="$FFBUILD_STAGE_ROOT/$STAGENAME"
     rm -rf "$STAGE_DIR"
     mkdir -p "$STAGE_DIR"
     if [[ -n "${STAGE_CACHE:-}" && -f "$STAGE_CACHE" ]]; then
         tar xaf "$STAGE_CACHE" -C "$STAGE_DIR"
+        ffbuild_materialise_absolute_links "$STAGE_DIR"
     fi
     cd "$STAGE_DIR"
 fi
@@ -123,15 +148,25 @@ if [[ -d "${FFBUILD_DESTDIR:-}" ]]; then
     # has been built and before FFmpeg is installed, so FFmpeg's own bin/ and
     # man1/ are unaffected.
     #
-    # --remove-destination is load-bearing: this merge runs again whenever a
-    # completed stage is rebuilt (e.g. after deleting its ffbuild/state marker),
-    # and plain `cp -l` refuses to replace a destination that already exists —
-    # it goes straight to link() and fails with EEXIST, which leaves the *old*
-    # files in place while the command exits non-zero. cp -a is the fallback for
-    # a cross-device destination, where hard links are impossible.
+    # --remove-destination is load-bearing: later stages and sibling scripts of
+    # the same directory stage install over files an earlier one already merged,
+    # and plain `cp -l` refuses to replace an existing destination — it goes
+    # straight to link() and fails with EEXIST, which leaves the *old* file in
+    # place while the command exits non-zero. cp -a is the fallback for a
+    # cross-device destination, where hard links are impossible.
+    #
+    # The sentinel marks the prefix as being modified. A copy interrupted here
+    # leaves an unknown part of the stage behind, which re-running the stage
+    # cannot repair; build.sh refuses to continue while the file exists.
     if [[ -d "$FFBUILD_DESTPREFIX" ]]; then
+        if [[ -n "${STAGE_KEY:-${STAGENAME:-}}" && -n "${FFBUILD_STATE:-}" ]]; then
+            : > "$FFBUILD_STATE/.merging.${STAGE_KEY:-${STAGENAME:-}}"
+        fi
         cp -al --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/ ||
             cp -a --remove-destination "$FFBUILD_DESTPREFIX"/. "$FFBUILD_PREFIX"/
+        if [[ -n "${STAGE_KEY:-${STAGENAME:-}}" && -n "${FFBUILD_STATE:-}" ]]; then
+            rm -f "$FFBUILD_STATE/.merging.${STAGE_KEY:-${STAGENAME:-}}"
+        fi
     fi
 fi
 

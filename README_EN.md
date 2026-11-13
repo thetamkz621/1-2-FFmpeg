@@ -5,9 +5,9 @@
 > [!NOTE]
 > Extensive use of AI agents during development.
 
-A Docker-free fork of [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds): build FFmpeg and its dependencies directly on a Linux x86_64 host.
+A Docker-free fork of [FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds): build FFmpeg and its dependencies directly on a Linux x86_64 host.
 
-Currently, only the `linux64` target is supported. Upstream's other targets remain present but are untested.
+The `linux64`, `linuxarm64`, `win64`, and `win32` targets are supported. `linuxarm64` and Windows targets require the crosstool-ng toolchain.
 
 ## Documentation
 
@@ -44,28 +44,44 @@ An x86_64 Linux host is required. `setup.sh` handles distribution packages (by d
 ./build.sh linux64 gpl      # fetch the sources and build
 ```
 
-On success, the artifact is written to `artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler>-<date>.tar.xz`.
+On success, the artifact is written to `artifacts/` as `ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler-or-toolchain>-<date>`; Windows targets use `.zip`, all other targets use `.tar.xz`.
 
 ### Targets, Variants and Addins
 
 Available targets:
-* ~~`win64` (x86_64 Windows)~~
-* ~~`win32` (x86 Windows)~~
 * `linux64` (x86_64 Linux)
-* ~~`linuxarm64` (arm64 (aarch64) Linux)~~
+* `linuxarm64` (arm64 (aarch64) Linux, ctng only, glibc 2.28)
+* `win64` (x86_64 Windows, ctng only)
+* `win32` (x86 Windows, ctng only)
 
-~~The linuxarm64 target will not build some dependencies due to lack of arm64 (aarch64) architecture support or cross-compiling restrictions.~~
+`win64` and `win32` require a matching crosstool-ng toolchain:
 
-* ~~`davs2` and `xavs2`: aarch64 support is broken.~~
-* ~~`libmfx` and `libva`: Library for Intel QSV, so there is no aarch64 support.~~
+```bash
+./native/setup.sh --install --with-ctng --ctng-target win64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+
+./native/setup.sh --install --with-ctng --ctng-target win32
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
+```
+
+`linuxarm64` requires its own crosstool-ng toolchain; the resulting binaries run through qemu-user:
+
+```bash
+./native/setup.sh --install --with-ctng --ctng-target linuxarm64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
+```
+
+`linuxarm64` skips `davs2` and `xavs2` (no aarch64 support) and `libvpl` (Intel QSV).
 
 Available variants:
 * `gpl` Includes all dependencies, even those that require full GPL instead of just LGPL.
 * `lgpl` Lacking libraries that are GPL-only. Most prominently libx264 and libx265.
-* `nonfree` Includes fdk-aac in addition to all the dependencies of the gpl variant.
+* `nonfree` Includes fdk-aac and zvbi in addition to all the dependencies of the gpl variant.
 * `gpl-shared` Same as gpl, but comes with the libav* family of shared libs instead of pure static executables.
 * `lgpl-shared` Same again, but with the lgpl set of dependencies.
 * `nonfree-shared` Same again, but with the nonfree set of dependencies.
+
+> zvbi is grouped under nonfree not because it is proprietary, but because its code is GPL-2-only and therefore incompatible with the GPL-3 gpl and lgpl variants (upstream commit [`1626915`](../../commit/162691525a439dbec17f5d01a8d241f134b7516d)).
 
 All of those can be optionally combined with any combination of addins:
 * `4.3`/`4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1`/`8.0`/`8.1`/`9.0` to build from the respective release branch instead of master.
@@ -77,11 +93,12 @@ All of those can be optionally combined with any combination of addins:
 ```bash
 FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
 FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
-FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng toolchain (untested)
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng toolchain
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh win64 gpl-shared 9.0   # build the win64 toolchain first
 ```
 
 > [!NOTE]
-> `host` (the default) probes `cc`, then `gcc`, then `clang`; `CXX` follows the same compiler family. `clang` / `gcc` only change the default binary names for the host toolchain. `ctng` uses a locally built crosstool-ng toolchain (**currently untested**) and requires running `./native/setup.sh --with-ctng` first.  
+> `host` (the default) probes `cc`, then `gcc`, then `clang`; `CXX` follows the same compiler family. `clang` / `gcc` only change the default binary names for the host toolchain. `ctng` uses a locally built crosstool-ng toolchain, stored per target under `.buildtools/ctng/<target>`. The initial linux64 and linuxarm64 builds compile glibc and GCC; Windows targets compile mingw-w64 and GCC. Build a toolchain with `./native/setup.sh --with-ctng --ctng-target <target>`; `linuxarm64` needs qemu-user to run the artifacts (`--install` installs it).  
 > `FFBUILD_CC` / `CC` (and `CXX`, `LD`, `AR`, …) override this selection, including versioned compilers such as `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`.  
 > Additional compiler flags can be supplied through `FFBUILD_EXTRA_CFLAGS` and `FFBUILD_EXTRA_LDFLAGS`.  
 > To inspect the resolved configuration, run `source native/env.sh && ffbuild_env_dump`.  
@@ -101,14 +118,16 @@ FFBUILD_PROXY= ./native/download.sh                   # ignore the proxy configu
 ## Project layout
 
 ```
-ffbuild/{prefix,destdir,work,log,state,pkgroot}   build root (FFBUILD_ROOT)
-.buildtools/                                      managed build tools, venv, Rust; not tracked by Git
-.cache/downloads/                                 dependency source cache
-artifacts/                                        build artifacts
+ffbuild/{prefix,destdir,work,log,state,toolchain,pkgroot}  build root (FFBUILD_ROOT)
+.buildtools/                                               managed build tools, venv, Rust; not tracked by Git
+.cache/downloads/                                          dependency source cache
+artifacts/                                                 build artifacts
 ```
 
+> `.buildtools/ctng/<target>` holds the crosstool-ng toolchain for each target.
+
 > `FFBUILD_ROOT` must not contain a period (this breaks path handling in `libxcb`/`libglvnd`).  
-> Artifacts match the host glibc; ~~use `FFBUILD_TOOLCHAIN_MODE=ctng` for a glibc 2.28 baseline~~.
+> linux64 artifacts match the host glibc; for a glibc 2.28 baseline, use `FFBUILD_TOOLCHAIN_MODE=ctng` (run `./native/setup.sh --with-ctng` first). linuxarm64 artifacts are aarch64 ELF on a glibc 2.28 baseline. win64 and win32 artifacts use the UCRT.
 
 ## License
 

@@ -17,7 +17,7 @@ All artifacts remain inside the repository; sudo is used only to install distrib
 |---|---|---|
 | apt | Debian 13, Ubuntu 22.04 / 24.04 / 26.04 | — |
 | dnf | Fedora 44 | — |
-| dnf (EL8) | Rocky Linux 8.10 | passes `--enablerepo=powertools` when installing |
+| dnf (EL8) | Rocky Linux 8.10 | passes `--enablerepo=powertools` when installing; cargo-c uses vendored OpenSSL |
 | pacman | Arch Linux | — |
 | zypper | openSUSE Leap 16 | — |
 
@@ -47,7 +47,12 @@ After installing packages or changing the configuration, run `./native/setup.sh 
 | `--buildtools-only` | process only the managed build tools, venv, and Implib (installing opam when needed) |
 | `--with-tools=a,b` | process only the listed managed build tools (already-built ones are skipped) |
 | `--no-managed-tools` | do not build the managed build tools; use the host-provided versions, but an existing `.buildtools/prefix/bin` still precedes them on `PATH` |
-| `--with-ctng` | additionally build the crosstool-ng toolchain (used with `FFBUILD_TOOLCHAIN_MODE=ctng`; **untested**) |
+| `--with-ctng` | additionally build the crosstool-ng toolchain (used with `FFBUILD_TOOLCHAIN_MODE=ctng`); skipped when the existing toolchain matches the current configuration |
+| `--ctng-target <target>` | select the toolchain target, default `linux64`; `linuxarm64` requires qemu-user to run the artifacts |
+| `--force-ctng` | rebuild the crosstool-ng toolchain |
+| `--keep-ctng-src` | keep the per-target ct-ng build tree (removed after installation by default to reclaim several GB) |
+
+The toolchain is installed per target under `.buildtools/ctng/<target>`, with `.buildtools/state/ctng-<target>.done` as the completion marker.  For `linuxarm64`, `--install` installs qemu-user; a missing emulator is only reported, because the build itself does not run target programs. `--with-ctng` always prepares the environment in host mode: setting `FFBUILD_TOOLCHAIN_MODE=ctng` no longer prevents the toolchain from being built. Do not run `--with-ctng` concurrently in the same checkout: targets share the ct-ng source tree and `.config`, so a second run exits as soon as it detects the build in progress.
 
 `-h` / `--help` prints the usage summary (same options as the table above, without the description column). The comment block at the top of the script is the authoritative source for this list.
 
@@ -55,13 +60,17 @@ After installing packages or changing the configuration, run `./native/setup.sh 
 
 `native/pkgdeps.conf` maps each capability to package names: one capability per line, with five columns for apt / dnf / dnf-el8 / pacman / zypper. `-` indicates that the distribution has no such package (for example, EL8 has no `ocaml-num`).
 
+EL8 installs no OpenSSL development package: when the system OpenSSL is too old, cargo-c builds a static copy through its `vendored-openssl` feature. The `--all` extras `p7zip` and `lcov` are available only from EPEL; when EPEL is not enabled, `--print-packages=all` prints an `dnf install -y epel-release` step first, and `--install --all` performs that step automatically.
+
 ## `--check` output
 
 ```
 [ok]        ready
 [managed]   provided by .buildtools/; not counted as a failure
-[MISSING]   missing; the following line usually gives the install command
+[MISSING]   missing; the following line usually gives the install command, and the build cannot proceed
+[warn]      does not block the build; artifacts or optional capabilities may be affected
 [absent]    optional tool; its absence does not affect the build
+[pending]   not yet satisfied; setup completes it automatically (for example, cargo-c is built with vendored OpenSSL)
 ```
 
 For a missing managed build tool, `[MISSING]` does not produce an install command; the output instead prompts you to rerun `setup.sh`.

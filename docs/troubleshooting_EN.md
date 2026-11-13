@@ -24,10 +24,31 @@ Install a compiler with C++23 support (GCC 12 or later). When clang is used, the
 
 For example:
 
-- RHEL 8: the system default GCC 8 does not meet this requirement. Install a `gcc-toolset` available in the configured repositories (the version depends on the repositories), then enable it with `scl enable <toolset> bash`; alternatively, set `FFBUILD_CC` and `FFBUILD_CXX` to `/opt/rh/<toolset>/root/usr/bin/gcc` and `g++`. If a toolset is installed, `--check` reports its path and how to enable it.
+- RHEL 8: the system default GCC 8 does not meet this requirement. Install a `gcc-toolset` available in the configured repositories (the version depends on the repositories), then enable it with `scl enable <toolset> bash`; alternatively, set `FFBUILD_CC` and `FFBUILD_CXX` to `/opt/rh/<toolset>/root/usr/bin/gcc` and `g++`.
 - Ubuntu 22.04: the system default GCC 11 does not meet this requirement. Install `gcc-12` and `g++-12`, then set `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`.
 
 After making the change, rerun `--check` and confirm that the `c++23 string_view` check passes.
+
+## `50-shaderc` fails because `c++` differs from `CXX`
+
+**Symptoms**: the `47-vulkan/50-shaderc` stage fails with undefined references to `std::filesystem`; the `openal` C++23 check may already pass.
+
+**Cause**: this stage's native_build unsets `CC` and `CXX`, after which cmake uses `c++` from `PATH`. `FFBUILD_CC` / `FFBUILD_CXX` never reach it, so setting those variables alone does not change the stage's behaviour.
+
+**Fix**: put a C++17-capable compiler at the front of `PATH`, for example `source /opt/rh/<toolset>/enable` or `export PATH=<toolchain>/bin:$PATH`. The `host c++ (shaderc)` item in `--check` reports the problem in advance.
+
+## `implib-gen` reports `Unrecognized form` when building with clang
+
+**Symptoms**: the `40-libdrm`, `50-libva`, or `45-x11` stage fails with output such as:
+
+```
+implib-gen.py: error: readelf failed with retcode 0:
+readelf: Warning: Unrecognized form: 0x22
+```
+
+**Cause**: clang emits DWARF5 debug information by default, and the host binutils `readelf` does not recognise some of its forms. `implib-gen.py`, invoked by `util/bin/gen-implib`, treats any stderr output from `readelf` as a failure.
+
+**Fix**: make the compiler emit the older debug format, for example `FFBUILD_EXTRA_CFLAGS=-gdwarf-4 FFBUILD_EXTRA_CXXFLAGS=-gdwarf-4`; or upgrade the host binutils.
 
 ## `ar` fails to index symbols, or LLVMgold is too old
 
@@ -68,6 +89,41 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 
 1. Prefer a checkout of the release branch: point `FFMPEG_REPO` at its working tree, or leave `FFMPEG_REPO` unset and select the corresponding version addin.
 2. If the archive must be used, skip the incompatible stage, for example `FFBUILD_SKIP_STAGES=openapv`. A skipped stage is also removed from FFmpeg's configure flags, so the resulting build no longer provides that feature.
+
+## The build root cannot be reused
+
+**Symptom**: the build stops after `== resolving dependency graph ==` and names a stage together with `the prefix cannot be reused`, `has no input fingerprint`, `is built, but stage` or `does not use`.
+
+**Cause**: `prefix/` is the product of one stage set built from one set of inputs, and every dependency's configure probes the whole prefix. The prefix stops matching the current build when any of the following applies:
+
+- a stage script, a patch or the source revision changed after the build, so the fingerprint recorded in the marker differs;
+- the FFmpeg version, addins or compile flags changed;
+- a marker was deleted by hand, or a previous run was interrupted while copying a stage into the prefix;
+- the markers were written by an older `build.sh` and carry no fingerprint.
+
+**Fix**: rebuild with `FFBUILD_FORCE=1` as the message says. It clears `prefix/`, `state/` and `destdir/` and rebuilds every stage from scratch; the toolchain under `.buildtools/`, the download cache in the repository and `artifacts/` are left alone. If two variants must be produced alternately (for example gpl and nonfree), give each its own `FFBUILD_ROOT` instead of rebuilding everything on every switch.
+
+## linuxarm64 artifacts do not run on the build machine
+
+**Symptoms**: running `bin/ffmpeg` directly fails with `Exec format error` or a missing dynamic loader.
+
+**Cause**: the artifact is an aarch64 ELF and the build machine is usually x86_64; the target glibc lives in the ctng sysroot and the host loader cannot use it.
+
+**Resolution**: run it through qemu-user and point the emulator at the sysroot:
+
+```bash
+QEMU_LD_PREFIX=.buildtools/ctng/linuxarm64/aarch64-ffbuild-linux-gnu/sysroot \
+    qemu-aarch64 ./artifacts/.../bin/ffmpeg -version
+```
+
+Shared variants also need the unpacked `lib/` directory:
+
+```bash
+QEMU_LD_PREFIX=<sysroot> qemu-aarch64 -E LD_LIBRARY_PATH=<unpacked>/lib \
+    <unpacked>/bin/ffmpeg ...
+```
+
+> Static variants do not need `LD_LIBRARY_PATH`. `setup.sh --check` only warns when `qemu-aarch64` is missing; the build itself is unaffected.
 
 ## Permission errors
 

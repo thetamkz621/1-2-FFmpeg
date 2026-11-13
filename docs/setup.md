@@ -17,7 +17,7 @@
 |---|---|---|
 | apt | Debian 13、Ubuntu 22.04 / 24.04 / 26.04 | — |
 | dnf | Fedora 44 | — |
-| dnf（EL8） | Rocky Linux 8.10 | 安装时自动传入 `--enablerepo=powertools` |
+| dnf（EL8） | Rocky Linux 8.10 | 安装时自动传入 `--enablerepo=powertools`；cargo-c 使用 vendored OpenSSL |
 | pacman | Arch Linux | — |
 | zypper | openSUSE Leap 16 | — |
 
@@ -47,7 +47,12 @@
 | `--buildtools-only` | 仅处理托管构建工具、venv 与 Implib（必要时安装 opam） |
 | `--with-tools=a,b` | 仅处理列出的托管构建工具（已构建的跳过） |
 | `--no-managed-tools` | 不构建托管构建工具，使用宿主提供的版本；当前仓库中已有的 `.buildtools/prefix/bin` 仍优先于 `PATH` |
-| `--with-ctng` | 额外构建 crosstool-ng 工具链（与 `FFBUILD_TOOLCHAIN_MODE=ctng` 配合使用，**未验证**） |
+| `--with-ctng` | 额外构建 crosstool-ng 工具链（与 `FFBUILD_TOOLCHAIN_MODE=ctng` 配合使用）；已构建且配置未变时跳过 |
+| `--ctng-target <target>` | 选择工具链目标，默认 `linux64`；`linuxarm64` 需要 qemu-user 运行产物 |
+| `--force-ctng` | 强制重建 crosstool-ng 工具链 |
+| `--keep-ctng-src` | 保留 ct-ng 的按目标构建树（默认在安装完成后删除，可释放数 GB） |
+
+工具链按目标安装到 `.buildtools/ctng/<target>`，完成标记为 `.buildtools/state/ctng-<target>.done`。`linuxarm64` 下 `--install` 会安装 qemu-user；`--check` 缺少它时只作提示，因为构建本身不运行目标程序。`--with-ctng` 始终以 host 模式准备环境：即使设置了 `FFBUILD_TOOLCHAIN_MODE=ctng`，也会继续构建工具链，不会因此提前退出。同一仓库中不要并发运行 `--with-ctng`：各目标共用 ct-ng 的源码树与 `.config`，检测到另一个构建正在进行时，后一个进程直接退出。
 
 `-h` / `--help` 打印用法摘要（选项与上表一致，但不含说明列）。脚本头部的注释是该清单的权威来源。
 
@@ -55,13 +60,17 @@
 
 `native/pkgdeps.conf` 是“能力 → 包名”的映射表：每行一个能力，按 apt / dnf / dnf-el8 / pacman / zypper 分为五列；`-` 表示该发行版没有对应软件包（例如 EL8 没有 `ocaml-num`）。
 
+EL8 不安装 OpenSSL 开发包：系统 OpenSSL 过旧时，cargo-c 通过自身的 `vendored-openssl` 特性静态编译一份 OpenSSL。`--all` 用到的 `p7zip`、`lcov` 只存在于 EPEL，未启用 EPEL 时 `--print-packages=all` 会先输出 `dnf install -y epel-release`，`--install --all` 自动完成该步骤。
+
 ## `--check` 输出说明
 
 ```
 [ok]       已就绪
 [managed]  由 .buildtools/ 提供，不计为失败
-[MISSING]  缺失；通常下一行给出安装命令
+[MISSING]  缺失；通常下一行给出安装命令，构建无法进行
+[warn]     不阻断构建；产物或可选能力可能受影响
 [absent]   可选工具；缺失不影响构建
+[pending]  尚未满足，但 setup 会自动完成（例如 cargo-c 以 vendored OpenSSL 构建）
 ```
 
 缺失项若属于托管构建工具，则不会给出安装命令，而是提示重新运行 `setup.sh`。

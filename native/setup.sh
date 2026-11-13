@@ -11,6 +11,9 @@
 #   ./native/setup.sh                 # provision the host (packages printed unless --install)
 #   ./native/setup.sh --all           # include the optional upstream packages in the list
 #   ./native/setup.sh --with-ctng     # additionally build the crosstool-ng toolchain
+#   ./native/setup.sh --with-ctng --force-ctng   # rebuild an existing toolchain
+#   ./native/setup.sh --with-ctng --ctng-target win64   # toolchain for another target
+#   ./native/setup.sh --with-ctng --keep-ctng-src  # keep the ct-ng build tree (several GB)
 #   ./native/setup.sh --install       # install the packages (default: print the command)
 #   ./native/setup.sh --no-install    # skip the package step entirely (managed externally)
 #   ./native/setup.sh --buildtools-only  # only build the managed build tools, touch nothing else
@@ -30,6 +33,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DO_CHECK=0
 DO_ALL=0
 WITH_CTNG=0
+FORCE_CTNG=0
+KEEP_CTNG_SRC=0
 DO_INSTALL=0
 NO_INSTALL=0
 PRINT_PKGS=0
@@ -37,12 +42,18 @@ PRINT_PKGS_ALL=0
 ONLY_BUILDTOOLS=0
 NO_MANAGED_TOOLS=0
 WITH_TOOLS=""
+# Target whose ctng toolchain is built and checked. The per-target details
+# (triple, config file, pruning style) come from native/targets/<target>.conf.
+CTNG_TARGET="${FFBUILD_TARGET:-linux64}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --check)      DO_CHECK=1 ;;
     --all)        DO_ALL=1 ;;
     --with-ctng)  WITH_CTNG=1 ;;
+    --force-ctng) FORCE_CTNG=1 ;;
+    --keep-ctng-src) KEEP_CTNG_SRC=1 ;;
+    --ctng-target) CTNG_TARGET="${2:?--ctng-target needs a value}"; shift ;;
     --install)    DO_INSTALL=1 ;;
     --no-install) NO_INSTALL=1 ;;
     --print-packages)     PRINT_PKGS=1 ;;
@@ -56,6 +67,10 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+# env.sh resolves the target from FFBUILD_TARGET. Export it before any package
+# list is assembled: the target decides which packages and toolchain apply.
+export FFBUILD_TARGET="$CTNG_TARGET"
 
 # ---------------------------------------------------------------- sudo --------
 if [[ "$(id -u)" -eq 0 ]]; then
@@ -179,6 +194,15 @@ if [[ "$PKG_FLAVOR" == dnf-el8 ]] &&
    dnf -q repolist --all 2>/dev/null | awk '{print $1}' | grep -qx powertools; then
     DNF_REPO_ARGS=(--enablerepo=powertools)
 fi
+# 核心清单不依赖 EPEL：cargo-c 在系统 OpenSSL 过旧时改用 vendored 构建。
+# 只有 --all 的 p7zip、lcov 来自 EPEL，而新装 EL8 默认没有启用 EPEL，此时整条
+# dnf 事务会因找不到这两个包而失败。探测只看本地已启用仓库，不联网；探测失败
+# 按"未启用"处理——多执行一次 epel-release 安装是无害的 no-op。
+NEED_EPEL=0
+if [[ "$PKG_FLAVOR" == dnf-el8 ]] && (( PRINT_PKGS_ALL || DO_ALL )) &&
+   ! dnf -q repolist --enabled 2>/dev/null | awk '{print $1}' | grep -qx epel; then
+    NEED_EPEL=1
+fi
 # Fedora 默认安装弱依赖（Recommends）。ant 的 JDK 绑定会 Recommends 完整 JDK，完整
 # JDK 又 Recommends gtk3，再经 gdk-pixbuf2 → glycin → libheif → libheif-ffmpeg 拉进
 # ffmpeg-free 全家（实测 789 包 / 642 MiB，关掉后 481 包 / 473 MiB）。构建宿主只认
@@ -225,6 +249,8 @@ tool_hint() {
         xxd)        pkg_cmd xxd ;;
         curl)       pkg_cmd curl ;;
         wget)       pkg_cmd wget ;;
+        qemu-*)     pkg_cmd qemu_user ;;
+        file|bzip2|gzip) pkg_cmd ctng_host ;;
         *)          echo "install it with your package manager (README §2.1)" ;;
     esac
 }
@@ -247,6 +273,30 @@ probe_version() {
 # Version comparison used by both --check and the install sections.
 version_ge() {  # $1 >= $2 (version sort)
     [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | sed -n '1p')" == "$2" ]]
+}
+
+# target_conf_get <target> <variable> -> native/targets/<target>.conf 中的值
+# Runs in a subshell so the caller's environment is untouched.
+target_conf_get() {
+    local t="$1" v="$2" f="$HERE/targets/$1.conf"
+    [[ -r "$f" ]] || return 1
+    (
+        set +u
+        # shellcheck source=/dev/null
+        . "$f"
+        eval "printf '%s' \"\${$v:-}\""
+    )
+}
+
+# cargo-c is a host tool, so probe the system OpenSSL rather than the FFmpeg
+# prefix. An empty result also covers a missing pkg-config or development files.
+system_openssl_version() {
+    local sys_pc="/usr/lib64/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig"
+    local triple
+    triple="$("${CC:-cc}" -dumpmachine 2>/dev/null || true)"
+    [[ -n "$triple" ]] && sys_pc="/usr/lib/$triple/pkgconfig:$sys_pc"
+    PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$sys_pc" \
+        pkg-config --modversion openssl 2>/dev/null || true
 }
 
 # --------------------------------------------------------------- packages -----
@@ -272,6 +322,18 @@ PKG_KEYS_CORE=(
     # 托管构建工具自建，但编它们要用 perl 核心模块
     perl_core
 )
+
+# Linux targets on another architecture are verified through qemu-user; the
+# build itself does not execute target programs, so this is a runtime tool
+# rather than a build dependency.
+if [[ -n "$(target_conf_get "$CTNG_TARGET" FFBUILD_TARGET_EMULATOR)" ]]; then
+    PKG_KEYS_CORE+=(qemu_user)
+fi
+# ct-ng's own configure requires file, bzip2 and gzip; they are only needed
+# when the toolchain is built.
+if (( WITH_CTNG )); then
+    PKG_KEYS_CORE+=(ctng_host)
+fi
 PKG_KEYS_EXTRA=(
     # 上游镜像有、当前默认图用不到；--all 时装上
     p7zip bsdtar xxd libxml2_tools mercurial
@@ -279,7 +341,7 @@ PKG_KEYS_EXTRA=(
     lcov lld qemu_user multilib
     # 自建 libtool 只装 libtool / libtoolize，ltdl 头文件仍由发行版提供
     libltdl
-    # install-doc 的 HTML 通道；缺了 build.sh 只告警
+    # 上游 base 镜像的包；HTML 文档由 makeinfo 生成，此项只为清单对齐
     texi2html
     # 上游装 nodesource 的 nodejs 与 python3-apt；仓库内零引用，保持能力对齐
     python3_apt nodejs
@@ -364,6 +426,17 @@ pkg_expand() {
     return 0
 }
 
+# pkg_plan <pkg...> -> 可整段粘贴的安装计划：EPEL 前置（EL8 的 --all 且未启用时）
+# 与主命令
+pkg_plan() {
+    (($#)) || return 0
+    if (( NEED_EPEL )); then
+        echo "# EL8 packages p7zip and lcov (--all extras) in EPEL, which is not enabled on this host:"
+        echo "dnf install -y epel-release"
+    fi
+    pkg_cmd_for "$@"
+}
+
 # pkg_cmd_for <pkg...> -> 一行可直接粘贴的安装命令
 pkg_cmd_for() {
     (($#)) || return 0
@@ -382,7 +455,7 @@ if [[ "$PRINT_PKGS" -eq 1 ]]; then
         echo "# no packages needed for $PKG_FLAVOR (${PKG_MGR:-unknown})"
         exit 0
     fi
-    pkg_cmd_for "${_print_pkgs[@]}"
+    pkg_plan "${_print_pkgs[@]}"
     exit 0
 fi
 
@@ -458,11 +531,16 @@ do_check() {
 
     echo "== runtime prerequisites (not managed; install from your distro) =="
     rt_ok()      { printf '  [ok]      %s\n' "$1"; }
-    # 第三个参数为 optional 时只提示、不影响退出码。
+    # [warn] 只提示：不阻断构建，也不影响退出码。用于"不满足也能构建，但产物或
+    # 可选能力会受影响"的情况。
+    rt_warn() {
+        printf '  [warn]    %s\n              %s\n' "$1" "$2"
+        return 0
+    }
     rt_blocking=0
     rt_missing() {
         printf '  [MISSING] %s\n              %s\n' "$1" "$2"
-        [[ "${3:-}" == optional ]] || rt_blocking=1
+        rt_blocking=1
     }
 
     # 编译器由 FFBUILD_TOOLCHAIN_MODE 选择（host 自动探测）；这里只报告解析结果。
@@ -471,6 +549,24 @@ do_check() {
     else
         rt_missing "compiler $CC / $CXX (mode $FFBUILD_TOOLCHAIN_MODE)" \
                    "$(tool_hint "${FFBUILD_TOOLCHAIN_MODE/host/gcc}")"
+    fi
+    if [[ "$FFBUILD_TOOLCHAIN_MODE" == ctng ]]; then
+        if [[ -x "$FFBUILD_CTNG_ROOT/bin/$CTNG_TRIPLE-gcc" ]]; then
+            rt_ok "ctng toolchain        $FFBUILD_TARGET: $FFBUILD_CTNG_ROOT"
+        else
+            rt_missing "ctng toolchain        $FFBUILD_TARGET: $FFBUILD_CTNG_ROOT" \
+                       "run ./native/setup.sh --with-ctng --ctng-target $FFBUILD_TARGET"
+        fi
+    fi
+    # qemu-user is only needed to run the resulting binaries, not to build
+    # them; report it without failing the check.
+    if [[ -n "$FFBUILD_TARGET_EMULATOR" ]]; then
+        if command -v "$FFBUILD_TARGET_EMULATOR" >/dev/null 2>&1; then
+            rt_ok "qemu                  $FFBUILD_TARGET: $(command -v "$FFBUILD_TARGET_EMULATOR")"
+        else
+            rt_warn "qemu                  $FFBUILD_TARGET: run artifacts" \
+                    "$(pkg_cmd qemu_user)"
+        fi
     fi
     # 默认变体经 50-ffnvcodec 打开 --enable-cuda-llvm，configure 把 nvcc 默认成 clang，
     # 所以即使宿主编译器是 gcc，clang 也是硬依赖（上游镜像同样把它列为基础包）。
@@ -536,6 +632,15 @@ do_check() {
                    "$(pkg_cmd perl_core)"
     fi
 
+    # 缺少 pod2man 时 FFmpeg 的 configure 关闭 manpages，构建继续，但产物不含
+    # doc/man。报告为 [warn]，因为影响范围仅限文档。
+    if command -v pod2man >/dev/null 2>&1; then
+        rt_ok "pod2man                FFmpeg man 页"
+    else
+        rt_warn "pod2man                FFmpeg man 页" \
+                 "缺失时产物不含 doc/man，构建不受影响"
+    fi
+
     # makeinfo / autopoint 由托管工具提供；没建之前不该让用户去装系统包。
     if command -v makeinfo >/dev/null 2>&1; then
         rt_ok "makeinfo (texinfo)     gmp 等 autotools 文档"
@@ -588,9 +693,32 @@ do_check() {
                    "$(pkg_cmd ocaml); setup installs num through opam when the repo has none" ;;
     esac
 
+    # shaderc 的 native_build 先 unset CC/CXX，cmake 因而使用 PATH 上的 c++。
+    # 这里探测的正是那个 c++，而不是 $CXX：glslang 需要 std::filesystem，GCC 9 之前
+    # 的 libstdc++ 还要额外链接 -lstdc++fs，缺失时链接失败。
+    local host_cxx host_cxx_ok=0 _cxx_dir
+    host_cxx="$(command -v c++ 2>/dev/null || true)"
+    if [[ -n "$host_cxx" ]]; then
+        _cxx_dir="${TMPDIR:-/tmp}/ffbuild-hostcxx.$$"
+        mkdir -p "$_cxx_dir"
+        if printf '%s\n' '#include <filesystem>
+int main(int argc, char **argv) {
+    std::filesystem::path p(argv[0]);
+    return std::filesystem::exists(p) ? 0 : 1;
+}' | env -u CC -u CXX "$host_cxx" -std=gnu++17 -x c++ - -o "$_cxx_dir/probe" >/dev/null 2>&1; then
+            host_cxx_ok=1
+        fi
+        rm -rf "$_cxx_dir"
+    fi
+    if (( host_cxx_ok )); then
+        rt_ok "host c++ (shaderc)    $host_cxx"
+    else
+        rt_missing "host c++ (shaderc)    cannot link a C++17 std::filesystem program" \
+                   "shaderc ignores CC/CXX and uses c++ from PATH; install a C++17-capable toolchain and put its bin/ first in PATH"
+    fi
     # 依赖里已经有 C++23 的用法（openal-soft 用 string_view 的范围构造）。直接
     # 探测标准库能力，比按编译器版本号判断可靠：clang 也可能配着旧的 libstdc++。
-    local cxx_probe cxx_hint
+    local cxx_probe
     cxx_probe='#include <algorithm>
 #include <ranges>
 #include <string_view>
@@ -606,22 +734,8 @@ int main(int argc, char **argv) {
     if printf '%s\n' "$cxx_probe" | "$CXX" -std=gnu++20 -x c++ -fsyntax-only - >/dev/null 2>&1; then
         rt_ok "c++23 string_view      openal (CXX=$CXX)"
     else
-        cxx_hint="$(pkg_cmd cxx23)"
-        # 装好的新编译器不一定在 PATH 上（RHEL 8 的 gcc-toolset、Ubuntu 的 gcc-12）：
-        # 这时给命令不如给"怎么用它"，否则用户会以为还要再装一个。
-        local _ts _ts_name
-        if command -v g++-12 >/dev/null 2>&1; then
-            cxx_hint="g++-12 is installed: rerun with FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12"
-        else
-            for _ts in /opt/rh/gcc-toolset-*/root/usr/bin/g++; do
-                [[ -x "$_ts" ]] || continue
-                _ts_name="${_ts#/opt/rh/}"; _ts_name="${_ts_name%%/*}"
-                cxx_hint="$_ts_name is installed (not on PATH): rerun under 'scl enable $_ts_name bash', or set FFBUILD_CC=${_ts%++} FFBUILD_CXX=$_ts"
-                break
-            done
-        fi
-        unset _ts _ts_name
-        rt_missing "c++23 string_view      openal (CXX=$CXX)" "$cxx_hint"
+        rt_missing "c++23 string_view      openal (CXX=$CXX)" \
+                   "$(pkg_cmd cxx23); or point FFBUILD_CXX at an installed compiler that supports it"
     fi
 
     # Rust 产物（rav1e/librsvg）里带 LLVM bitcode，binutils 的 bfd 靠 LLVMgold
@@ -643,17 +757,18 @@ int main(int argc, char **argv) {
         rt_ok "llvm bfd plugin       rust 静态库"
     fi
 
-    # cargo-c needs OpenSSL 3 *development* files, not the CLI: a host can have
-    # the openssl3 binary without any headers (Fedora's openssl-devel is
-    # separate). On EL8 the system tree stays at 1.1.1 and openssl3-devel
-    # installs a parallel one that setup points openssl-sys at.
-    ossl_ver="$(openssl version 2>/dev/null | awk '{print $2}')"
-    if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3" && [[ -f /usr/include/openssl/ssl.h ]]; then
-        rt_ok "OpenSSL >= 3 (dev)     cargo-c (found $ossl_ver)"
-    elif [[ -f /usr/include/openssl3/openssl/ssl.h ]]; then
-        rt_ok "OpenSSL 3 dev tree     cargo-c (/usr/include/openssl3, system $ossl_ver)"
+    # cargo-c 优先使用系统的 OpenSSL 3 开发文件；系统没有时由 vendored 特性自建。
+    # 只有 cargo-c 实际可运行且不依赖系统 libssl 时才报 [ok]；否则报 [pending]，
+    # 表示它尚未按 vendored 方式构建。
+    ossl_ver="$(system_openssl_version)"
+    if [[ -n "$ossl_ver" ]] && version_ge "$ossl_ver" "3.0.0"; then
+        rt_ok "OpenSSL >= 3 (dev)     cargo-c (system $ossl_ver)"
+    elif command -v cargo-cinstall >/dev/null 2>&1 && cargo-cinstall --version >/dev/null 2>&1 &&
+         command -v ldd >/dev/null 2>&1 &&
+         ! ldd "$(command -v cargo-cinstall)" 2>/dev/null | grep -q libssl; then
+        rt_ok "OpenSSL                 cargo-c (vendored, static)"
     else
-        rt_missing "OpenSSL >= 3 (dev)     cargo-c" "$(tool_hint openssl3-devel)"
+        printf '  %-10s %s\n' "[pending]" "OpenSSL                 cargo-c will build with vendored OpenSSL"
     fi
     unset -f rt_ok rt_missing
     echo
@@ -710,7 +825,7 @@ elif [[ "$DO_INSTALL" -ne 1 ]]; then
     echo "      install them yourself, or rerun with --install:"
     mapfile -t _hint_pkgs < <(pkg_expand)
     if ((${#_hint_pkgs[@]})); then
-        pkg_cmd_for "${_hint_pkgs[@]}" | sed 's/^/        /'
+        pkg_plan "${_hint_pkgs[@]}" | sed 's/^/        /'
     else
         echo "        (no column for $PKG_FLAVOR in pkgdeps.conf)"
     fi
@@ -731,6 +846,17 @@ if [[ "$INSTALL_OK" -eq 1 ]]; then
     fi
 fi
 
+# --all 的 p7zip、lcov 来自 EPEL，必须在可用性过滤之前装好 epel-release；否则
+# pkg_available 会把它们判成"发行版没有"直接丢掉。
+if [[ "$INSTALL_OK" -eq 1 ]] && (( NEED_EPEL )); then
+    echo "== enabling EPEL (EL8) =="
+    if ! asroot dnf install -y epel-release; then
+        echo "WARNING: epel-release could not be installed; p7zip and lcov will be missing." >&2
+        echo "         RHEL 8 without EPEL in its own repositories:" >&2
+        echo "         dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm" >&2
+    fi
+fi
+
 if [[ "$INSTALL_OK" -eq 1 ]]; then
     mapfile -t _want < <(pkg_expand)
     _keep=() _drop=() _unknown=()
@@ -745,6 +871,9 @@ if [[ "$INSTALL_OK" -eq 1 ]]; then
     done
     if ((${#_drop[@]})); then
         echo "note: not in the configured repositories, skipped: ${_drop[*]}"
+        if (( NEED_EPEL )) && [[ " ${_drop[*]} " == *" p7zip "* || " ${_drop[*]} " == *" lcov "* ]]; then
+            echo "      p7zip/lcov come from EPEL: install epel-release, then rerun"
+        fi
     fi
     if ((${#_unknown[@]})); then
         echo "note: repository metadata is not cached; ${#_unknown[@]} package(s) go to the package manager unchecked"
@@ -768,12 +897,25 @@ fi
 if [[ "$DO_CHECK" -eq 1 ]]; then
     export FFBUILD_ENV_CHECK_ONLY=1
 fi
+# Building the toolchain always uses the host compiler. A caller-supplied ctng
+# mode describes the later FFmpeg build and would make env.sh demand a
+# toolchain that does not exist yet.
+if [[ "$DO_CHECK" -eq 0 && "$WITH_CTNG" -eq 1 && "${FFBUILD_TOOLCHAIN_MODE:-}" == ctng ]]; then
+    echo "note: building the toolchain in host mode; FFBUILD_TOOLCHAIN_MODE applies to the FFmpeg build"
+    FFBUILD_TOOLCHAIN_MODE=host
+    export FFBUILD_TOOLCHAIN_MODE
+fi
+
 # shellcheck source=native/env.sh
 if ! source "$HERE/env.sh"; then
     echo "setup.sh: build environment is incomplete — install the packages listed above" >&2
     echo "          (or run ./native/setup.sh --check), then re-run this script" >&2
     exit 2
 fi
+
+# The toolchain triple always comes from the target file: setup also builds the
+# toolchain in host mode, where env.sh leaves FFBUILD_TOOLCHAIN_TRIPLE unset.
+CTNG_TRIPLE="$FFBUILD_TARGET_CTNG_TRIPLE"
 
 if [[ -n "${FFBUILD_IGNORED_CARGO_HOME:-}${FFBUILD_IGNORED_RUSTUP_HOME:-}" ]]; then
     echo "note: ignoring CARGO_HOME/RUSTUP_HOME from the environment; build caches stay under $FFBUILD_BUILDTOOLS_PREFIX"
@@ -795,6 +937,24 @@ if [[ ! -x "$RETRY_TOOL" ]]; then
     exit 1
 fi
 
+# Fetch only the pinned ct-ng commit. A full clone transfers far more than the
+# build needs and is markedly more likely to hit TLS resets on slow links.
+ctng_fetch_source() {  # <dest> <url> <commit>
+    local dest="$1" url="$2" commit="$3"
+    if [[ -z "$dest" || -z "$url" || -z "$commit" ]]; then
+        echo "ctng_fetch_source: empty destination, URL, or commit" >&2
+        return 1
+    fi
+    RETRY_MAX="${CTNG_FETCH_ATTEMPTS:-3}" "$RETRY_TOOL" bash -c '
+        dest=$1; url=$2; commit=$3
+        rm -rf "$dest"
+        mkdir -p "$dest"
+        git -C "$dest" init -q
+        git -C "$dest" fetch --depth=1 "$url" "$commit"
+        git -C "$dest" checkout -q --detach FETCH_HEAD
+    ' _ "$dest" "$url" "$commit"
+}
+
 # Clean the destination before every attempt: an interrupted clone leaves a
 # partial repository that the next attempt cannot reuse.
 clone_retry() {  # <dest> <url> [git clone options...]
@@ -808,6 +968,47 @@ clone_retry() {  # <dest> <url> [git clone options...]
         rm -rf "$dest"
         exec git clone "$@" "$url" "$dest"
     ' _ "$dest" "$url" "$@"
+}
+
+# Upstream prunes the toolchain's unversioned shared-library symlinks so that
+# everything except the C library links statically; the libc archives are
+# removed at the same time so glibc itself stays dynamic. Keep the LTO plugin
+# and the core glibc components.
+#
+# This must run before dependencies are built: with libgomp.so removed,
+# CMake's OpenMP probes fail and soxr/vidstab build serially, which is the
+# upstream behaviour.  Reusing a build tree created before pruning leaves
+# OpenMP objects behind and breaks shared-library links.
+ctng_prune_toolchain() {
+    [[ -d "$FFBUILD_CTNG_ROOT/$CTNG_TRIPLE/sysroot" ]] || return 1
+    echo "== pruning $FFBUILD_TARGET toolchain ($FFBUILD_TARGET_PRUNE): $FFBUILD_CTNG_ROOT"
+    case "$FFBUILD_TARGET_PRUNE" in
+    mingw)
+        # Upstream removes the MinGW runtime DLLs and their import libraries so
+        # that everything but the C runtime links statically.
+        find "$FFBUILD_CTNG_ROOT" \( -name '*.dll' -o -name '*.dll.a' \) -delete
+        ;;
+    *)
+        find "$FFBUILD_CTNG_ROOT" \( -type l \
+            -and -name '*.so' \
+            -and -not -ipath '*plugin*' \
+            -and -not -name 'libdl.*' \
+            -and -not -name 'libc.*' \
+            -and -not -name 'libm.*' \
+            -and -not -name 'libmvec.*' \
+            -and -not -name 'librt.*' \
+            -and -not -name 'libpthread.*' \
+            \) -delete
+        find "$FFBUILD_CTNG_ROOT" \( \
+            -name 'libdl.a' \
+            -or -name 'libc.a' \
+            -or -name 'libm.a' \
+            -or -name 'libmvec.a' \
+            -or -name 'librt.a' \
+            -or -name 'libpthread.a' \
+            \) -delete
+        ;;
+    esac
 }
 
 # ------------------------------------------------------------ build tools -----
@@ -1086,16 +1287,12 @@ if [[ "$ONLY_BUILDTOOLS" -eq 1 ]]; then
     exit 0
 fi
 
-# --------------------------------------------------- toolchain descriptor -----
-# The descriptors live inside the repo and are reached through
-# $FFBUILD_MESON_CROSS_FILE / $FFBUILD_CMAKE_TOOLCHAIN, so this only has to
-# create them — no symlink under /, no root.
-echo "== writing toolchain descriptor files =="
-mkdir -p "$FFBUILD_REPO_ROOT/toolchain/generated"
-ffbuild_write_toolchain_files
-echo "  $FFBUILD_REPO_ROOT/toolchain/generated/{cross.meson,toolchain.cmake}"
-
 # ------------------------------------------------------------ build root ------
+# The meson and cmake descriptors are written by build.sh into
+# $FFBUILD_ROOT/toolchain/, after it has locked the root and resolved the
+# target. Setup runs in host mode and has no build to describe, so it writes
+# nothing here: doing so used to overwrite the descriptors of a build running
+# in another root.
 echo "== creating build root =="
 mkdir -p "$FFBUILD_ROOT"/{prefix,destdir,work,log} "$FFBUILD_ROOT/prefix/lib/pkgconfig" "$FFBUILD_ROOT/prefix/include" "$FFBUILD_ROOT/prefix/bin"
 echo "  $FFBUILD_ROOT"
@@ -1120,20 +1317,6 @@ prepare_rust() {
     mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
     # cargo-c's build must see *system* pkg-config files (e.g. openssl); the
     # prefix-only PKG_CONFIG_LIBDIR installed by native/env.sh would hide them.
-    #
-    # Its curl-sys dependency bundles a curl that requires OpenSSL >= 3.  EL8
-    # ships 1.1.1; EPEL's openssl3-devel installs a parallel tree, so point
-    # openssl-sys at it instead of failing with "OpenSSL 3.0.0 or greater".
-    if [[ "$(openssl version 2>/dev/null | awk '{print $2}' | cut -d. -f1)" -lt 3 ]]; then
-        if [[ -f /usr/include/openssl3/openssl/ssl.h ]]; then
-            export OPENSSL_INCLUDE_DIR=/usr/include/openssl3
-            export OPENSSL_LIB_DIR=/usr/lib64/openssl3
-            echo "  note: cargo-c will build against OpenSSL 3 (/usr/include/openssl3)"
-        else
-            echo "  WARNING: OpenSSL < 3 and openssl3-devel is missing; cargo-c may fail" >&2
-            echo "           install openssl3-devel (dnf) first; cargo-c needs OpenSSL 3" >&2
-        fi
-    fi
     # cargo-c is the only piece that has no distro package; everything else
     # (cargo, rustc) is reused from the host when it works.
     cargo_c_install() {
@@ -1149,10 +1332,18 @@ prepare_rust() {
             unset PKG_CONFIG_PATH
             export PKG_CONFIG_LIBDIR="$_sys_pc"
             unset _sys_pc _triple
+            # 系统没有 OpenSSL 3 开发文件时，使用 cargo-c 官方的 vendored 特性。
+            # 该特性让全部 Rust 原生依赖共用静态 OpenSSL，避免混用宿主并行版本。
+            _cargo_c_features=()
+            _ossl_ver="$(system_openssl_version)"
+            if [[ -z "$_ossl_ver" ]] || ! version_ge "$_ossl_ver" "3.0.0"; then
+                _cargo_c_features=(--features=vendored-openssl)
+                echo "  note: no system OpenSSL 3 development files; cargo-c will use vendored OpenSSL"
+            fi
             # 中间产物不放 TMPDIR（可能是 tmpfs）也不放 ~/.cargo：cargo-c 的构建很吃空间。
             mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/tmp" "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target"
             TMPDIR="$FFBUILD_BUILDTOOLS_PREFIX/tmp" \
-                cargo install --target-dir "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target" cargo-c
+                cargo install --target-dir "$FFBUILD_BUILDTOOLS_PREFIX/cargo-target" cargo-c "${_cargo_c_features[@]}"
         )
     }
 
@@ -1220,30 +1411,198 @@ prepare_rust() {
     fi
 }
 
+# Cross-compiled Rust: the toolchain needs the target's prebuilt std, and
+# crates that do not export CC_<target> need a linker in cargo's config.
+prepare_rust_target() {
+    local want="$FFBUILD_RUST_TARGET" host="" cfg=""
+    [[ -n "$want" ]] || return 0
+    host="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')"
+    # Native builds already have their target; nothing to add.
+    if [[ -z "$host" || "$want" == "$host" ]]; then
+        return 0
+    fi
+    if ! command -v rustup >/dev/null 2>&1; then
+        echo "  WARNING: rustup not found; cannot add rust target $want" >&2
+        note_failure "rust (target $want)"
+        return 0
+    fi
+    if ! rustup target list --installed 2>/dev/null | grep -qx "$want"; then
+        echo "== adding rust target $want =="
+        rustup target add "$want" || { note_failure "rust (target $want)"; return 0; }
+    fi
+    if [[ -n "$FFBUILD_CROSS_PREFIX" ]]; then
+        cfg="$CARGO_HOME/config.toml"
+        mkdir -p "$CARGO_HOME"
+        if [[ -f "$cfg" ]]; then
+            sed -i '/^# >>> ffbuild cross target/,/^# <<< ffbuild cross target/d' "$cfg"
+        fi
+        {
+            echo "# >>> ffbuild cross target (generated by setup.sh)"
+            echo "[target.$want]"
+            echo "linker = \"${FFBUILD_CROSS_PREFIX}gcc\""
+            echo "ar = \"${FFBUILD_CROSS_PREFIX}gcc-ar\""
+            echo "# <<< ffbuild cross target"
+        } >> "$cfg"
+        echo "  cargo config: $cfg (target.$want)"
+    fi
+}
+
 prepare_rust
+prepare_rust_target
 
 # ---------------------------------------------------------------- ct-ng -------
 if [[ "$WITH_CTNG" -eq 1 ]]; then
-    echo "== building crosstool-ng toolchain (this takes a long time) =="
-    CTNG_SRC="$FFBUILD_ROOT/ctng-src"
-    mkdir -p "$FFBUILD_ROOT"
-    if [[ ! -d "$CTNG_SRC/.git" ]]; then
-        clone_retry "$CTNG_SRC" https://github.com/crosstool-ng/crosstool-ng.git --filter=blob:none
+    CTNG_REPO="https://github.com/crosstool-ng/crosstool-ng.git"
+    # The per-target config was generated by this ct-ng revision, which the
+    # config header records. Cloning master would break as soon as
+    # crosstool-ng changes a configuration symbol; a revision older than the
+    # one that generated the config silently drops the symbols it added.
+    CTNG_COMMIT="fbb637297fef385204304f5ee32a168ea6145280"
+    CTNG_CONFIG="$FFBUILD_REPO_ROOT/toolchain/ctng/$FFBUILD_TARGET_CTNG_CONFIG"
+    CTNG_STATE="$FFBUILD_BUILDTOOLS_PREFIX/state/ctng-$FFBUILD_TARGET.done"
+    CTNG_CC="$FFBUILD_CTNG_ROOT/bin/$CTNG_TRIPLE-gcc"
+    # Component tarballs are target-independent; keeping them outside the
+    # prefix also stops CT_RM_RF_PREFIX_DIR from deleting them on every rebuild.
+    CTNG_SOURCES="$FFBUILD_BUILDTOOLS_PREFIX/ctng/sources"
+    if [[ ! -f "$CTNG_CONFIG" ]]; then
+        echo "setup.sh: missing toolchain config $CTNG_CONFIG" >&2
+        exit 1
     fi
-    (
-        cd "$CTNG_SRC"
-        ./bootstrap
-        ./configure --prefix="$FFBUILD_CTNG_ROOT" --enable-local
-        make -j"$FFBUILD_JOBS"
-        cp "$FFBUILD_REPO_ROOT/toolchain/ctng/ct-ng-config" .config
-        # crosstool-ng installs the finished toolchain in CT_PREFIX_DIR, and it
-        # rm -rf's that directory first (CT_RM_RF_PREFIX_DIR=y). Point it at the
-        # root this driver expects instead of the container's /opt.
-        sed -i "s|^CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$FFBUILD_CTNG_ROOT\"|" .config
-        ./ct-ng build
-    )
-    echo "ct-ng toolchain installed under $FFBUILD_CTNG_ROOT"
-    echo "Enable it with: FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl"
+    # The config header names the ct-ng version that generated it. When the
+    # config is updated without CTNG_COMMIT, kconfig ignores every symbol the
+    # older revision does not know and the toolchain no longer matches the
+    # config, without any error. Compare the two so that cannot go unnoticed.
+    CTNG_CFG_VER="$(sed -n 's/^# crosstool-NG \(.*\) Configuration$/\1/p' "$CTNG_CONFIG")"
+    if [[ "$CTNG_CFG_VER" == *_* ]]; then
+        CTNG_CFG_REV="${CTNG_CFG_VER##*_}"
+        if [[ "$CTNG_COMMIT" != "$CTNG_CFG_REV"* ]]; then
+            echo "setup.sh: $CTNG_CONFIG was generated by ct-ng $CTNG_CFG_VER," >&2
+            echo "           but CTNG_COMMIT is $CTNG_COMMIT" >&2
+            exit 1
+        fi
+    fi
+    # Bump CTNG_LOGIC_VERSION whenever the toolchain-building logic in this
+    # file changes (pruning, sed rewrites, build invocation): otherwise an
+    # existing toolchain would be considered current after a logic change.
+    CTNG_LOGIC_VERSION=1
+    CTNG_KEY="$(sha256sum "$CTNG_CONFIG" | cut -d' ' -f1) $CTNG_COMMIT $CTNG_TRIPLE $FFBUILD_TARGET_PRUNE $CTNG_LOGIC_VERSION"
+    CTNG_STALE=0
+    if [[ -f "$CTNG_STATE" && "$(cat "$CTNG_STATE")" != "$CTNG_KEY" ]]; then
+        CTNG_STALE=1
+    fi
+
+    if [[ "$FORCE_CTNG" -eq 0 && -f "$CTNG_STATE" &&
+          "$(cat "$CTNG_STATE")" == "$CTNG_KEY" && -x "$CTNG_CC" ]]; then
+        ctng_prune_toolchain || {
+            echo "setup.sh: $FFBUILD_CTNG_ROOT does not look like a ct-ng toolchain" >&2
+            exit 1
+        }
+        echo "== crosstool-ng toolchain already built: $FFBUILD_CTNG_ROOT"
+        echo "   use --force-ctng to rebuild it"
+    else
+        echo "== building crosstool-ng toolchain (this takes a long time) =="
+        CTNG_SRC="$FFBUILD_ROOT/ctng-src"
+        mkdir -p "$FFBUILD_ROOT" "$FFBUILD_CTNG_ROOT" "$CTNG_SOURCES" "$(dirname "$CTNG_STATE")"
+        # Every target shares one ct-ng source tree: .config, the bootstrap and
+        # configure output, and build.log exist once. A second setup run would
+        # overwrite the first one's configuration and race in the same build
+        # tree, so refuse it instead of serialising an unsupported workflow.
+        CTNG_LOCK="$(dirname "$CTNG_STATE")/ctng-build.lock"
+        if command -v flock >/dev/null 2>&1; then
+            exec 9>"$CTNG_LOCK"
+            if ! flock -n 9; then
+                echo "setup.sh: another ct-ng build is running (lock: $CTNG_LOCK)" >&2
+                echo "           wait for it to finish, then run this command again" >&2
+                exit 1
+            fi
+        else
+            echo "note: flock is unavailable; concurrent ct-ng builds are not detected"
+        fi
+        if [[ "$FORCE_CTNG" -eq 1 || "$CTNG_STALE" -eq 1 ]]; then
+            # A changed config or build procedure can leave objects that no
+            # longer match; start from a clean per-target tree.
+            rm -rf "$CTNG_SRC/build/$CTNG_TRIPLE"
+        fi
+        if [[ ! -d "$CTNG_SRC/.git" ]] ||
+           ! git -C "$CTNG_SRC" cat-file -e "${CTNG_COMMIT}^{commit}" 2>/dev/null; then
+            if ! ctng_fetch_source "$CTNG_SRC" "$CTNG_REPO" "$CTNG_COMMIT"; then
+                echo "setup.sh: shallow fetch of $CTNG_COMMIT failed; falling back to a full clone" >&2
+                clone_retry "$CTNG_SRC" "$CTNG_REPO" --filter=blob:none || {
+                    echo "setup.sh: cannot fetch crosstool-ng" >&2
+                    exit 1
+                }
+            fi
+        fi
+        git -C "$CTNG_SRC" checkout --quiet --detach "$CTNG_COMMIT" || {
+            echo "setup.sh: cannot check out crosstool-ng $CTNG_COMMIT" >&2
+            exit 1
+        }
+        (
+            cd "$CTNG_SRC"
+            ./bootstrap
+            ./configure --prefix="$FFBUILD_CTNG_ROOT" --enable-local
+            make -j"$FFBUILD_JOBS"
+            cp "$CTNG_CONFIG" .config
+            # ct-ng defaults to /opt for the install prefix and $HOME/src for
+            # component tarballs; keep both inside the repository instead, and
+            # share the tarballs between targets.
+            sed -i "s|^CT_PREFIX_DIR=.*|CT_PREFIX_DIR=\"$FFBUILD_CTNG_ROOT\"|" .config
+            sed -i "s|^CT_LOCAL_TARBALLS_DIR=.*|CT_LOCAL_TARBALLS_DIR=\"$CTNG_SOURCES\"|" .config
+            # Without CT_SAVE_TARBALLS ct-ng leaves downloads in build/tarballs
+            # and consumes anything already in the local dir; enabling it keeps
+            # one copy per component and lets every target reuse them.
+            sed -i 's|^# CT_SAVE_TARBALLS is not set|CT_SAVE_TARBALLS=y|' .config
+            # ct-ng aborts when CC/CXX/CFLAGS/LD_LIBRARY_PATH are set: they
+            # belong to the final build, not to the toolchain build. Upstream
+            # runs ct-ng in a base image without them; drop the same variables
+            # for this step only.
+            unset CC CXX LD AR AS RANLIB NM STRIP OBJDUMP CPP
+            unset CFLAGS CXXFLAGS LDFLAGS CPPFLAGS LIBS
+            unset LD_LIBRARY_PATH LIBRARY_PATH LPATH
+            unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH
+            unset PKG_CONFIG_LIBDIR PKG_CONFIG_PATH PKG_CONFIG
+            # Prime the per-build tarball dir from the shared sources. The
+            # package iterator does not reliably consult CT_LOCAL_TARBALLS_DIR,
+            # but it always honours CT_TARBALLS_DIR, so symlinking here makes
+            # reuse independent of the fetch path.
+            mkdir -p "$CTNG_SRC/build/tarballs"
+            for _ctng_src in "$CTNG_SOURCES"/*; do
+                [[ -f "$_ctng_src" ]] || continue
+                ln -sf "$_ctng_src" "$CTNG_SRC/build/tarballs/$(basename "$_ctng_src")"
+            done
+            unset _ctng_src
+            # ct-ng's frontend declares "build: .config", and a directory named
+            # build in the source tree satisfies that target. Creating
+            # build/tarballs above therefore makes make report the toolchain as
+            # up to date without running anything; make the prerequisite newer
+            # so the recipe actually runs.
+            touch .config
+            ./ct-ng build
+        )
+        ctng_prune_toolchain || {
+            echo "setup.sh: ct-ng finished but $FFBUILD_CTNG_ROOT/$CTNG_TRIPLE/sysroot is missing" >&2
+            exit 1
+        }
+        if [[ ! -x "$CTNG_CC" ]]; then
+            echo "setup.sh: ct-ng finished but $CTNG_CC is missing" >&2
+            exit 1
+        fi
+        printf '%s\n' "$CTNG_KEY" > "$CTNG_STATE"
+        # ct-ng writes its own log into the shared source tree, where the next
+        # target would overwrite it; move it to the per-target log directory
+        # before the build tree is removed.
+        mkdir -p "$FFBUILD_BUILDTOOLS_PREFIX/log"
+        mv "$CTNG_SRC/build.log" "$FFBUILD_BUILDTOOLS_PREFIX/log/ctng-$FFBUILD_TARGET.log" 2>/dev/null || true
+        if [[ "$KEEP_CTNG_SRC" -eq 0 ]]; then
+            # The component tarballs live in build/tarballs (shared, and now
+            # backed by the local sources dir); the per-target build tree is
+            # only needed until the toolchain is installed.
+            rm -rf "$CTNG_SRC/build/$CTNG_TRIPLE"
+            echo "removed the ct-ng build tree for $FFBUILD_TARGET (use --keep-ctng-src to keep it)"
+        fi
+        echo "ct-ng toolchain installed under $FFBUILD_CTNG_ROOT"
+        echo "Enable it with: FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh $FFBUILD_TARGET gpl"
+    fi
 fi
 
 if ((${#SETUP_FAILURES[@]})); then
@@ -1255,4 +1614,4 @@ echo
 echo "== setup complete =="
 ffbuild_env_dump
 echo
-echo "Next: ./native/download.sh && ./build.sh linux64 gpl"
+echo "Next: ./native/download.sh && ./build.sh $FFBUILD_TARGET gpl"

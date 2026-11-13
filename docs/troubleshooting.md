@@ -23,10 +23,31 @@
 安装支持 C++23 的编译器（GCC 12 或更高）。使用 clang 时，其配套的 libstdc++ 头文件也需为 GCC 12 或更高版本。
 
 例如：
-- RHEL 8：系统默认的 GCC 8 不满足要求。安装仓库中可用的 `gcc-toolset`（版本依仓库而定），然后用 `scl enable <toolset> bash` 启用；或将 `FFBUILD_CC` / `FFBUILD_CXX` 指向 `/opt/rh/<toolset>/root/usr/bin/gcc` 与 `g++`。若已安装 toolset，`--check` 的提示会给出其路径与启用方式。
+- RHEL 8：系统默认的 GCC 8 不满足要求。安装仓库中可用的 `gcc-toolset`（版本依仓库而定），然后用 `scl enable <toolset> bash` 启用；或将 `FFBUILD_CC` / `FFBUILD_CXX` 指向 `/opt/rh/<toolset>/root/usr/bin/gcc` 与 `g++`。
 - Ubuntu 22.04：系统默认的 GCC 11 不满足要求。安装 `gcc-12` 与 `g++-12`，然后设置 `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`。
 
 修改后重新运行 `--check`，确认 `c++23 string_view` 一项通过。
+
+## `50-shaderc` 构建失败（`c++` 与 `CXX` 不同）
+
+**症状**：`47-vulkan/50-shaderc` 阶段失败，错误涉及 `std::filesystem` 的未定义引用；`openal` 的 C++23 检查可能已通过。
+
+**原因**：该阶段的 native_build 先 `unset CC CXX`，再由 cmake 使用 PATH 上的 `c++`。`FFBUILD_CC` / `FFBUILD_CXX` 无法传递到这里，只设置这两个变量不改变该阶段的行为。
+
+**处理**：把支持 C++17 的编译器放到 PATH 最前，例如 `source /opt/rh/<toolset>/enable` 或 `export PATH=<toolchain>/bin:$PATH`。`--check` 的 `host c++ (shaderc)` 一项会提前报告该问题。
+
+## clang 构建时 `implib-gen` 报 `Unrecognized form`
+
+**症状**：`40-libdrm`、`50-libva` 或 `45-x11` 阶段失败，输出包含：
+
+```
+implib-gen.py: error: readelf failed with retcode 0:
+readelf: Warning: Unrecognized form: 0x22
+```
+
+**原因**：clang 默认生成 DWARF5 调试信息，宿主 binutils 的 `readelf` 不认识其中部分形式；`util/bin/gen-implib` 调用的 `implib-gen.py` 把 `readelf` 的任何 stderr 输出当作失败。
+
+**处理**：让编译器生成旧版调试信息，例如 `FFBUILD_EXTRA_CFLAGS=-gdwarf-4 FFBUILD_EXTRA_CXXFLAGS=-gdwarf-4`；或升级宿主 binutils。
 
 ## `ar` 索引符号失败或 LLVMgold 版本过低
 
@@ -67,6 +88,41 @@ libavcodec/liboapvenc.c:512:29: error: passing argument 1 of 'oapvm_create'
 
 1. 优先使用发布分支的检出：将 `FFMPEG_REPO` 指向该分支的工作树，或不设置 `FFMPEG_REPO` 并使用对应的版本附加项。
 2. 必须使用该源码包时，跳过不兼容的阶段，例如 `FFBUILD_SKIP_STAGES=openapv`。被跳过的阶段同时从 FFmpeg 的 configure 参数中移除，产物不再包含对应功能。
+
+## 构建根无法复用
+
+**症状**：构建在 `== resolving dependency graph ==` 之后停止，报错指出某个阶段，并带有 `the prefix cannot be reused`、`has no input fingerprint`、`is built, but stage` 或 `does not use`。
+
+**原因**：`prefix/` 是某一组阶段在某一组输入下的产物，而每个依赖的 configure 都会探测整个前缀。以下情况都会使前缀与当前构建不符：
+
+- 阶段脚本、补丁或取源版本在构建后发生变化，标记记录的输入指纹与当前不同；
+- 更换 FFmpeg 版本、addin 或编译参数；
+- 手工删除了 `state/` 中的标记，或上次构建在把阶段产物复制进前缀时被中断；
+- 标记由更早版本的 `build.sh` 写入，不含输入指纹。
+
+**处理**：按提示以 `FFBUILD_FORCE=1` 重建。该选项清空构建根的 `prefix/`、`state/` 与 `destdir/`，全部阶段从头构建；`.buildtools/` 中的工具链、仓库内的下载缓存与 `artifacts/` 不受影响。若两类产物需要交替构建（例如 gpl 与 nonfree），分别指定 `FFBUILD_ROOT`，避免每次切换都全量重建。
+
+## 无法在构建机上直接运行 linuxarm64 产物
+
+**症状**：直接执行 `bin/ffmpeg` 报 `Exec format error`，或提示找不到动态链接器。
+
+**原因**：产物是 aarch64 ELF，构建机通常是 x86_64；它依赖的目标 glibc 位于 ctng 的 sysroot 中，宿主链接器不适用。
+
+**处理**：通过 qemu-user 运行，并把 sysroot 交给它：
+
+```bash
+QEMU_LD_PREFIX=.buildtools/ctng/linuxarm64/aarch64-ffbuild-linux-gnu/sysroot \
+    qemu-aarch64 ./artifacts/.../bin/ffmpeg -version
+```
+
+共享变体还需要指向解包目录中的 `lib/`：
+
+```bash
+QEMU_LD_PREFIX=<sysroot> qemu-aarch64 -E LD_LIBRARY_PATH=<解包目录>/lib \
+    <解包目录>/bin/ffmpeg ...
+```
+
+> 静态变体不需要 `LD_LIBRARY_PATH`。`setup.sh --check` 缺少 `qemu-aarch64` 时只作提示，不影响构建。
 
 ## 权限错误
 

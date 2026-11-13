@@ -5,9 +5,9 @@
 > [!NOTE]
 > 开发过程中大量使用 AI agent。
 
-基于 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的去 Docker 化版本：直接在 Linux x86_64 主机上构建 FFmpeg 及其依赖。
+基于 [FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds) 的去 Docker 化版本：直接在 Linux x86_64 主机上构建 FFmpeg 及其依赖。
 
-仅支持 `linux64` 目标。上游其余目标仍保留，但尚未验证。
+支持 `linux64`、`linuxarm64`、`win64` 与 `win32` 目标。`linuxarm64` 与 Windows 目标只能使用 crosstool-ng 工具链。
 
 ## 文档
 
@@ -44,28 +44,45 @@
 ./build.sh linux64 gpl      # 获取源码并构建
 ```
 
-成功后产物位于 `artifacts/ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器>-<日期>.tar.xz`。
+成功后产物位于 `artifacts/`，名称格式为 `ffmpeg-<版本>-<目标>-<变体>[-<附加项>]-<编译器或工具链>-<日期>`；Windows 目标为 `.zip`，其余目标为 `.tar.xz`。
 
 ### 目标、变体与附加项
 
 可用目标：
-* ~~`win64`（x86_64 Windows）~~
-* ~~`win32`（x86 Windows）~~
 * `linux64`（x86_64 Linux）
-* ~~`linuxarm64`（arm64 / aarch64 Linux）~~
+* `linuxarm64`（arm64 / aarch64 Linux，仅 ctng；glibc 2.28）
+* `win64`（x86_64 Windows，仅 ctng）
+* `win32`（x86 Windows，仅 ctng）
 
-~~linuxarm64 目标因缺少 arm64（aarch64）架构支持或受交叉编译限制，部分依赖无法构建。~~
+`win64` 与 `win32` 需要先构建对应的 crosstool-ng 工具链：
 
-* ~~`davs2` 与 `xavs2`：aarch64 支持不可用。~~
-* ~~`libmfx` 与 `libva`：Intel QSV 库，无 aarch64 支持。~~
+```bash
+./native/setup.sh --install --with-ctng --ctng-target win64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+
+./native/setup.sh --install --with-ctng --ctng-target win32
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
+```
+
+`linuxarm64` 需要先构建对应的 crosstool-ng 工具链；产物通过 qemu-user 运行：
+
+```bash
+./native/setup.sh --install --with-ctng --ctng-target linuxarm64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
+```
+
+`linuxarm64` 跳过 `davs2`、`xavs2`（无 aarch64 支持）与 `libvpl`（Intel QSV）。
 
 可用变体：
 * `gpl` 包含全部依赖，包括要求完整 GPL 而非仅 LGPL 的部分。
 * `lgpl` 不包含仅 GPL 的库，主要是 libx264 与 libx265。
-* `nonfree` 在 gpl 变体的依赖之外额外包含 fdk-aac。
+* `nonfree` 在 gpl 变体的依赖之外额外包含 fdk-aac 与 zvbi。
 * `gpl-shared` 同 gpl，但提供 libav* 系列动态库，而非纯静态可执行文件。
 * `lgpl-shared` 同上，使用 lgpl 依赖集。
 * `nonfree-shared` 同上，使用 nonfree 依赖集。
+
+> `zvbi` 归入 `nonfree` 并非因为它属于非自由软件，而是其代码仅以 GPL-2 发布，与采用 GPL-3 的 gpl、lgpl 变体不兼容
+（上游提交 [`1626915`](../../commit/162691525a439dbec17f5d01a8d241f134b7516d)）。
 
 以上变体均可与任意附加项组合：
 * `4.3`/`4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1`/`8.0`/`8.1`/`9.0` 从对应 release 分支而非 master 构建。
@@ -77,11 +94,14 @@
 ```bash
 FFBUILD_TOOLCHAIN_MODE=clang ./build.sh linux64 gpl
 FFBUILD_TOOLCHAIN_MODE=gcc   ./build.sh linux64 gpl
-FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng 工具链（未验证）
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linux64 gpl   # crosstool-ng 工具链
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh win64 gpl-shared 9.0   # 需先构建 win64 工具链
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh win32 gpl-shared 9.0   # 需先构建 win32 工具链
+FFBUILD_TOOLCHAIN_MODE=ctng  ./build.sh linuxarm64 gpl-shared 9.0   # 需先构建 linuxarm64 工具链
 ```
 
 > [!NOTE]
-> `host`（默认）按 `cc` → `gcc` → `clang` 顺序探测，`CXX` 跟随同一编译器家族；`clang` / `gcc` 仅设置宿主工具链的默认二进制名称；`ctng` 使用本地构建的 crosstool-ng 工具链（**目前未验证**），需先运行 `./native/setup.sh --with-ctng`。  
+> `host`（默认）按 `cc` → `gcc` → `clang` 顺序探测，`CXX` 跟随同一编译器家族；`clang` / `gcc` 仅设置宿主工具链的默认二进制名称；`ctng` 使用本地构建的 crosstool-ng 工具链，按目标存放在 `.buildtools/ctng/<target>`；linux64 与 linuxarm64 首次构建包含 glibc 与 GCC，Windows 目标包含 mingw-w64 与 GCC，耗时较长。构建工具链时使用 `./native/setup.sh --with-ctng --ctng-target <目标>`；`linuxarm64` 需安装 qemu-user 以运行产物（`--install` 会一并安装）。  
 > `FFBUILD_CC` / `CC`（以及 `CXX`、`LD`、`AR` 等）可覆盖上述选择，也可指向带版本号的编译器（如 `FFBUILD_CC=gcc-12 FFBUILD_CXX=g++-12`）。  
 > 追加编译选项使用 `FFBUILD_EXTRA_CFLAGS`、`FFBUILD_EXTRA_LDFLAGS`。  
 > 查看最终配置：`source native/env.sh && ffbuild_env_dump`。  
@@ -101,14 +121,16 @@ FFBUILD_PROXY= ./native/download.sh                   # 不使用 shell 中的�
 ## 目录
 
 ```
-ffbuild/{prefix,destdir,work,log,state,pkgroot}   构建根（FFBUILD_ROOT）
-.buildtools/                                      托管构建工具、venv、Rust，不纳入版本控制
-.cache/downloads/                                 依赖源码缓存
-artifacts/                                        产物
+ffbuild/{prefix,destdir,work,log,state,toolchain,pkgroot}  构建根（FFBUILD_ROOT）
+.buildtools/                                               托管构建工具、venv、Rust，不纳入版本控制
+.cache/downloads/                                          依赖源码缓存
+artifacts/                                                 产物
 ```
 
+> `.buildtools/ctng/<target>` 存放各目标的 crosstool-ng 工具链。
+
 > `FFBUILD_ROOT` 路径不能包含 `.`（上游 `libxcb`/`libglvnd` 的路径处理会失败）。  
-> 产物与宿主 glibc 匹配，~~如需 glibc 2.28 基线，使用 `FFBUILD_TOOLCHAIN_MODE=ctng`~~。
+> `linux64` 产物与宿主 glibc 匹配；如需 glibc 2.28 基线，使用 `FFBUILD_TOOLCHAIN_MODE=ctng`（先运行 `./native/setup.sh --with-ctng`）。`win64` 与 `win32` 产物依赖 UCRT；`linuxarm64` 产物为 glibc 2.28 基线的 aarch64 ELF。
 
 ## 许可
 

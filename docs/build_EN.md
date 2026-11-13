@@ -14,6 +14,38 @@ Targets, variants, and addins are listed in the [README](../README_EN.md#targets
 
 Before building, `native/download.sh --needed <target> <variant>` runs automatically to fetch the required sources; set `FFBUILD_SKIP_DOWNLOAD=1` to skip this step (reusing the existing cache). `FFBUILD_FFMPEG_ONLY=1` also skips it.
 
+## Targets
+
+| Target | Toolchain | Notes |
+|---|---|---|
+| `linux64` | host `gcc` / `clang`, or `ctng` | native or same-architecture cross build |
+| `linuxarm64` | `ctng` only | produces aarch64 ELF; running it requires qemu-user; `build.sh` exits early without ctng |
+| `win64` | `ctng` only | `build.sh` exits early when ctng is not used |
+| `win32` | `ctng` only | `build.sh` exits early when ctng is not used |
+
+```bash
+# linux64 with the host toolchain
+./build.sh linux64 gpl-shared 9.0
+
+# linux64 with crosstool-ng (glibc 2.28 baseline)
+./native/setup.sh --install --with-ctng
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linux64 gpl-shared 9.0
+
+# win64
+./native/setup.sh --install --with-ctng --ctng-target win64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win64 gpl-shared 9.0
+
+# win32
+./native/setup.sh --install --with-ctng --ctng-target win32
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh win32 gpl-shared 9.0
+
+# linuxarm64
+./native/setup.sh --install --with-ctng --ctng-target linuxarm64
+FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
+```
+
+The target is selected by the first argument to `build.sh`; when building a toolchain, pass the same target to `setup.sh --ctng-target`.
+
 ## Compiler and toolchain
 
 | Variable | Meaning |
@@ -21,9 +53,12 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 | `FFBUILD_TOOLCHAIN_MODE` | `host` (default; probes `cc` → `gcc` → `clang`) / `clang` / `gcc` / `ctng` |
 | `FFBUILD_CC` `FFBUILD_CXX` `FFBUILD_LD` `FFBUILD_AR` … | per-tool overrides (or use `CC=` / `CXX=`, among others) |
 | `FFBUILD_TOOLCHAIN_TRIPLE` | override the `--host` triple passed to each stage |
-| `FFBUILD_CTNG_ROOT` | crosstool-ng toolchain location, default `$FFBUILD_ROOT/ctng` |
+| `FFBUILD_CTNG_ROOT` | crosstool-ng toolchain location, default `.buildtools/ctng/<target>` (unaffected by `FFBUILD_CLEAN`) |
 
-`clang` / `gcc` only set the defaults for the host toolchain. `ctng` requires running `./native/setup.sh --with-ctng` first. (**Currently untested.**)
+`clang` / `gcc` only set the defaults for the host toolchain. `ctng` requires running `./native/setup.sh --with-ctng --ctng-target <target>` for that target first.
+
+> The ctng toolchain lives in `.buildtools/ctng/<target>`; the initial linux64 build compiles glibc and GCC, while win64 compiles mingw-w64 and GCC.  
+> Pruning runs before dependencies are built, so `soxr` and `vidstab` are compiled serially; host `gcc` and `clang` builds are unaffected.  
 
 ## Compiler flags
 
@@ -41,15 +76,22 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 | Variable | Meaning |
 |---|---|
 | `FFBUILD_CLEAN=1` | remove `FFBUILD_ROOT` before building (**⚠️ use with caution**) |
-| `FFBUILD_FORCE=1` | rebuild every stage, ignoring resume state |
+| `FFBUILD_FORCE=1` | clear `prefix/`, `state/` and `destdir/`, then rebuild every stage (**⚠️ discards built dependencies**) |
 | `FFBUILD_DEPS_ONLY=1` | build dependencies only; do not build FFmpeg |
-| `FFBUILD_FFMPEG_ONLY=1` | skip dependencies and reuse the existing prefix |
+| `FFBUILD_FFMPEG_ONLY=1` | skip dependencies and reuse the existing prefix; cannot be combined with `FFBUILD_FORCE` / `FFBUILD_CLEAN` |
 | `FFBUILD_SKIP_DOWNLOAD=1` | do not refresh the download cache |
 | `FFBUILD_JOBS=<N>` | number of parallel jobs, default `nproc` |
 | `FFBUILD_ROOT=<path>` | build root, default `<repo>/ffbuild`; the path must not contain `.` |
 | `FFBUILD_BUILD_DATE=YYYYMMDD` | pin the date in the artifact name |
 | `FFBUILD_SKIP_STAGES=a,b` | skip the listed stages, separated by commas or spaces (for example, `rav1e` and `librsvg` when Rust is unavailable) |
 | `FFBUILD_EXTRA_VERSION=<str>` | passed to FFmpeg as `--extra-version`, default `YYYYMMDD`; affects `ffmpeg -version` output, not the artifact name |
+
+The build root is stamped with `<target>:<compiler>`. A host build and a ctng build, or two different targets, cannot share one root; use a separate `FFBUILD_ROOT` or set `FFBUILD_CLEAN=1` when switching.
+
+Reusing a build root has preconditions: every stage the current build needs must carry a marker whose recorded input fingerprint (stage script, patches, source revision, compiler and compile flags) still matches, and when stages remain to be built, the marked stages must be exactly those that precede them. If either condition fails, the build stops and explains why instead of building on top of the existing prefix. Follow the message: rebuild from an empty prefix with `FFBUILD_FORCE=1`, or use a separate `FFBUILD_ROOT` for that combination.
+
+> `FFBUILD_FFMPEG_ONLY=1` relies on the same preconditions: it reports an error when a dependency is missing or was built from different inputs, and never rebuilds dependencies.
+> License variants can share a prefix directly only once it is complete (for example, switching from a finished nonfree build to gpl); the opposite direction usually needs a rebuild, because the added stages precede stages already built. shared and static are unaffected.
 
 ## FFmpeg source
 
@@ -65,6 +107,7 @@ Before building, `native/download.sh --needed <target> <variant>` runs automatic
 - The source is always copied or cloned to `$FFBUILD_ROOT/ffmpeg`; the original is never modified.
 - Uncommitted changes in a local git repository are not part of the build. To include them, copy the working tree to a plain directory and point `FFMPEG_REPO` at the copy.
 - When the source root contains `RELEASE`, its major and minor version must match the version addin (`8.1` for `RELEASE` `8.1.1`); otherwise the build stops.
+- A development tree marks itself with `X.Y.git` (FFmpeg master carries `8.0.git`). It needs no version addin and takes the newest stage set; a matching `X.Y` version addin is rejected, because it would re-gate the build to the older version.
 - `GIT_BRANCH_OVERRIDE` has no effect on a local plain directory.
 - A source tree with neither `RELEASE` nor `.git` makes `ffbuild/version.sh` record `N` as the artifact version.
 
@@ -90,8 +133,9 @@ source native/env.sh && ffbuild_env_dump
 | `ffbuild/log` | per-stage logs |
 | `ffbuild/state` | resume state |
 | `ffbuild/destdir` | per-stage `DESTDIR`, merged into `prefix` when the stage finishes |
+| `ffbuild/toolchain` | meson and cmake descriptors (written by `build.sh`) |
 | `ffbuild/pkgroot` | packaging scratch directory |
-| `ffbuild/ctng` | crosstool-ng toolchain (`ctng` mode) |
+| `.buildtools/ctng/<target>` | crosstool-ng toolchain (`ctng` mode) |
 | `.buildtools/` | managed build tools, venv, Rust, opam |
 | `.cache/downloads/` | source cache |
 | `artifacts/` | build artifacts |
@@ -99,8 +143,12 @@ source native/env.sh && ffbuild_env_dump
 Artifact name:
 
 ```
-artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler>-<date>.tar.xz
+artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler-or-toolchain>-<date>.tar.xz   # non-Windows targets
+artifacts/ffmpeg-<version>-<target>-<variant>[-<addins>]-<compiler-or-toolchain>-<date>.zip      # Windows targets
 ```
+
+> This field is `gcc` or `clang` for host builds, and `ctng` in ctng mode.  
+> Windows artifacts contain `bin/*.exe` and `bin/*.dll`, with import libraries under `lib/`; they use the UCRT and do not depend on libgcc, libstdc++, or winpthread DLLs.
 
 ## Cache and retries
 

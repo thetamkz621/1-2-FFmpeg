@@ -43,16 +43,16 @@ ffbuild_unconfigure() {
 
 ffbuild_ldflags() {
     echo -pthread
-}
-
-ffbuild_libs() {
-    # FFmpeg probes libsoxr with a bare -lsoxr (no pkg-config), so the OpenMP
-    # runtime has to arrive through --extra-libs as well.  Reuse what CMake
-    # recorded in soxr.pc instead of hard-coding GCC's -lgomp: clang lowers
-    # OpenMP to the kmp ABI and links libomp.
-    local pc="${FFBUILD_PREFIX:-}/lib/pkgconfig/soxr.pc" priv
-    [[ -f "$pc" ]] || return 0
-    priv="$(sed -n 's/^Libs\.private:[[:space:]]*//p' "$pc")"
-    [[ -n "$priv" ]] && echo "$priv"
+    # OpenMP 运行库交给编译器驱动展开：链接期的 -fopenmp 会变成 -lgomp 或
+    # -lomp，并带上运行库所在的搜索目录。是否启用 OpenMP 由安装后的 soxr.pc
+    # 反映——CMake 没找到时 Libs.private 为空。
+    #
+    # 放在 --extra-ldflags 而不是 --extra-libs：LDFLAGS 同时进入可执行文件与
+    # libav*.so 的链接行，作用范围与上游把 -lgomp 放进 --extra-libs 相同，
+    # 单独使用 libav*.so 时也能解析 OpenMP 符号。
+    local pc="${FFBUILD_PREFIX:-}/lib/pkgconfig/soxr.pc"
+    if [[ -f "$pc" ]] && grep -q '^Libs\.private:.*-fopenmp' "$pc"; then
+        echo -fopenmp
+    fi
     return 0
 }
