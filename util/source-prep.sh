@@ -81,13 +81,26 @@ ffmpeg_source_prepare() {
 
 # A source tree carrying RELEASE comes from a release artifact; the stage set
 # is selected by the version addin, so a mismatch would configure the wrong
-# tree with the wrong flags. Git checkouts have no RELEASE and are left alone.
+# tree with the wrong flags. Development trees mark themselves with a
+# "<major>.<minor>.git" RELEASE (master carries 8.0.git): they take the newest
+# stage set, which ffbuild_ffver returns when no version addin is given, so a
+# version addin must be rejected instead of silently re-gating the build.
 ffmpeg_source_check_version() {
-    local rel="" want=""
+    local rel="" want="" addin
 
     [[ -f "$FFMPEG_DIR/RELEASE" ]] || return 0
 
     rel="$(head -n 1 "$FFMPEG_DIR/RELEASE" | tr -d '[:space:]')"
+    if [[ "$rel" =~ ^[0-9]+\.[0-9]+\.git$ ]]; then
+        for addin in "${ADDINS[@]:-}"; do
+            if [[ "$addin" =~ ^[0-9]+\.[0-9]+$ ]]; then
+                echo "build.sh: source is an FFmpeg development tree ($rel); drop the $addin addin" >&2
+                echo "          version-gated stages use the newest set without a version addin" >&2
+                return 1
+            fi
+        done
+        return 0
+    fi
     if [[ ! "$rel" =~ ^([0-9]+)\.([0-9]+) ]]; then
         echo "build.sh: cannot parse FFmpeg RELEASE '$rel'; skipping version check" >&2
         return 0
