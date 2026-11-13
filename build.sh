@@ -79,10 +79,6 @@ for addin in ${ADDINS[*]}; do
     type ffbuild_dockeraddin &>/dev/null && ffbuild_dockeraddin || true
 done
 
-# Refresh the generated /cross.meson + /toolchain.cmake targets so meson/cmake
-# stages see the resolved compilers (including any override).
-ffbuild_write_toolchain_files
-
 case "$TARGET" in
 linux64)
     ;;
@@ -176,6 +172,13 @@ if [[ -n "${FFBUILD_COMPILER:-}" ]]; then
     fi
     unset _prev_compiler _prev_raw
 fi
+
+# Write /cross.meson and /toolchain.cmake into this build root, now that the lock
+# is held, the tree has been cleared if asked to, and the target/compiler stamp
+# has been checked. They embed the prefix and the compiler, so one root cannot
+# serve two builds; keeping them out of the repository is what stops another
+# target's build (or setup.sh) from overwriting the copy a running stage reads.
+ffbuild_write_toolchain_files
 
 # Reuse is only sound when the prefix holds exactly the stages that precede the
 # first stage still to build: every configure in this tree probes the prefix as a

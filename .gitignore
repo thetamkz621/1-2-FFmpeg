@@ -11,7 +11,5 @@
 /tmp/
 *.tar.xz
 *.zip
-# Generated toolchain descriptor files (see native/env.sh)
-/toolchain/generated/
 # Transient per-stage /patches target
 /patches-current/

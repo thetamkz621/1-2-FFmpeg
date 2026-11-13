@@ -1287,16 +1287,12 @@ if [[ "$ONLY_BUILDTOOLS" -eq 1 ]]; then
     exit 0
 fi
 
-# --------------------------------------------------- toolchain descriptor -----
-# The descriptors live inside the repo and are reached through
-# $FFBUILD_MESON_CROSS_FILE / $FFBUILD_CMAKE_TOOLCHAIN, so this only has to
-# create them — no symlink under /, no root.
-echo "== writing toolchain descriptor files =="
-mkdir -p "$FFBUILD_REPO_ROOT/toolchain/generated"
-ffbuild_write_toolchain_files
-echo "  $FFBUILD_REPO_ROOT/toolchain/generated/{cross.meson,toolchain.cmake}"
-
 # ------------------------------------------------------------ build root ------
+# The meson and cmake descriptors are written by build.sh into
+# $FFBUILD_ROOT/toolchain/, after it has locked the root and resolved the
+# target. Setup runs in host mode and has no build to describe, so it writes
+# nothing here: doing so used to overwrite the descriptors of a build running
+# in another root.
 echo "== creating build root =="
 mkdir -p "$FFBUILD_ROOT"/{prefix,destdir,work,log} "$FFBUILD_ROOT/prefix/lib/pkgconfig" "$FFBUILD_ROOT/prefix/include" "$FFBUILD_ROOT/prefix/bin"
 echo "  $FFBUILD_ROOT"
