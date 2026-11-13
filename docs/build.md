@@ -79,7 +79,7 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 | `FFBUILD_CLEAN=1` | 构建前清空 `FFBUILD_ROOT`（**⚠️ 谨慎使用**） |
 | `FFBUILD_FORCE=1` | 清空 `prefix/`、`state/` 与 `destdir/` 后重建全部阶段（**⚠️ 丢弃已构建的依赖**） |
 | `FFBUILD_DEPS_ONLY=1` | 仅构建依赖，不构建 FFmpeg |
-| `FFBUILD_FFMPEG_ONLY=1` | 跳过依赖，复用现有 prefix |
+| `FFBUILD_FFMPEG_ONLY=1` | 跳过依赖，复用现有 prefix；不能与 `FFBUILD_FORCE` / `FFBUILD_CLEAN` 同时使用 |
 | `FFBUILD_SKIP_DOWNLOAD=1` | 不刷新下载缓存 |
 | `FFBUILD_JOBS=<N>` | 并行任务数，默认 `nproc` |
 | `FFBUILD_ROOT=<path>` | 构建根，默认 `<repo>/ffbuild`；路径不能包含 `.` |
@@ -108,6 +108,7 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 - 源码始终复制或克隆到 `$FFBUILD_ROOT/ffmpeg`，原目录不会被修改。
 - 本地 git 仓库中未提交的改动不会进入构建；需要包含这些改动时，将工作树复制为普通目录后指向该副本。
 - 源码根含 `RELEASE` 时，其主次版本必须与版本附加项一致（例如 `RELEASE` 为 `8.1.1` 时传入 `8.1`），否则构建退出。
+- `RELEASE` 为 `X.Y.git` 的开发树（FFmpeg master 为 `8.0.git`）不需要版本附加项，阶段门控按最新集合处理；此时传入 `X.Y` 版本附加项会直接报错，因为它会把门控退回到旧版本。
 - `GIT_BRANCH_OVERRIDE` 对本地普通目录无效。
 - 源码既无 `RELEASE` 也不是 git 仓库时，`ffbuild/version.sh` 会把产物版本记为 `N`。
 
@@ -133,6 +134,7 @@ source native/env.sh && ffbuild_env_dump
 | `ffbuild/log` | 各 stage 的日志 |
 | `ffbuild/state` | 断点续建状态 |
 | `ffbuild/destdir` | 各 stage 的 `DESTDIR`，stage 结束后合并到 `prefix` |
+| `ffbuild/toolchain` | meson 与 cmake 的描述文件（由 `build.sh` 生成） |
 | `ffbuild/pkgroot` | 打包暂存目录 |
 | `.buildtools/ctng/<target>` | crosstool-ng 工具链（`ctng` 模式） |
 | `.buildtools/` | 托管构建工具、venv、Rust、opam |

@@ -76,10 +76,12 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 Available variants:
 * `gpl` Includes all dependencies, even those that require full GPL instead of just LGPL.
 * `lgpl` Lacking libraries that are GPL-only. Most prominently libx264 and libx265.
-* `nonfree` Includes fdk-aac in addition to all the dependencies of the gpl variant.
+* `nonfree` Includes fdk-aac and zvbi in addition to all the dependencies of the gpl variant.
 * `gpl-shared` Same as gpl, but comes with the libav* family of shared libs instead of pure static executables.
 * `lgpl-shared` Same again, but with the lgpl set of dependencies.
 * `nonfree-shared` Same again, but with the nonfree set of dependencies.
+
+> zvbi is grouped under nonfree not because it is proprietary, but because its code is GPL-2-only and therefore incompatible with the GPL-3 gpl and lgpl variants (upstream commit [`1626915`](../../commit/162691525a439dbec17f5d01a8d241f134b7516d)).
 
 All of those can be optionally combined with any combination of addins:
 * `4.3`/`4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1`/`8.0`/`8.1`/`9.0` to build from the respective release branch instead of master.
@@ -116,10 +118,10 @@ FFBUILD_PROXY= ./native/download.sh                   # ignore the proxy configu
 ## Project layout
 
 ```
-ffbuild/{prefix,destdir,work,log,state,pkgroot}   build root (FFBUILD_ROOT)
-.buildtools/                                      managed build tools, venv, Rust; not tracked by Git
-.cache/downloads/                                 dependency source cache
-artifacts/                                        build artifacts
+ffbuild/{prefix,destdir,work,log,state,toolchain,pkgroot}  build root (FFBUILD_ROOT)
+.buildtools/                                               managed build tools, venv, Rust; not tracked by Git
+.cache/downloads/                                          dependency source cache
+artifacts/                                                 build artifacts
 ```
 
 > `.buildtools/ctng/<target>` holds the crosstool-ng toolchain for each target.

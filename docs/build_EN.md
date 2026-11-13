@@ -78,7 +78,7 @@ The target is selected by the first argument to `build.sh`; when building a tool
 | `FFBUILD_CLEAN=1` | remove `FFBUILD_ROOT` before building (**⚠️ use with caution**) |
 | `FFBUILD_FORCE=1` | clear `prefix/`, `state/` and `destdir/`, then rebuild every stage (**⚠️ discards built dependencies**) |
 | `FFBUILD_DEPS_ONLY=1` | build dependencies only; do not build FFmpeg |
-| `FFBUILD_FFMPEG_ONLY=1` | skip dependencies and reuse the existing prefix |
+| `FFBUILD_FFMPEG_ONLY=1` | skip dependencies and reuse the existing prefix; cannot be combined with `FFBUILD_FORCE` / `FFBUILD_CLEAN` |
 | `FFBUILD_SKIP_DOWNLOAD=1` | do not refresh the download cache |
 | `FFBUILD_JOBS=<N>` | number of parallel jobs, default `nproc` |
 | `FFBUILD_ROOT=<path>` | build root, default `<repo>/ffbuild`; the path must not contain `.` |
@@ -107,6 +107,7 @@ Reusing a build root has preconditions: every stage the current build needs must
 - The source is always copied or cloned to `$FFBUILD_ROOT/ffmpeg`; the original is never modified.
 - Uncommitted changes in a local git repository are not part of the build. To include them, copy the working tree to a plain directory and point `FFMPEG_REPO` at the copy.
 - When the source root contains `RELEASE`, its major and minor version must match the version addin (`8.1` for `RELEASE` `8.1.1`); otherwise the build stops.
+- A development tree marks itself with `X.Y.git` (FFmpeg master carries `8.0.git`). It needs no version addin and takes the newest stage set; a matching `X.Y` version addin is rejected, because it would re-gate the build to the older version.
 - `GIT_BRANCH_OVERRIDE` has no effect on a local plain directory.
 - A source tree with neither `RELEASE` nor `.git` makes `ffbuild/version.sh` record `N` as the artifact version.
 
@@ -132,6 +133,7 @@ source native/env.sh && ffbuild_env_dump
 | `ffbuild/log` | per-stage logs |
 | `ffbuild/state` | resume state |
 | `ffbuild/destdir` | per-stage `DESTDIR`, merged into `prefix` when the stage finishes |
+| `ffbuild/toolchain` | meson and cmake descriptors (written by `build.sh`) |
 | `ffbuild/pkgroot` | packaging scratch directory |
 | `.buildtools/ctng/<target>` | crosstool-ng toolchain (`ctng` mode) |
 | `.buildtools/` | managed build tools, venv, Rust, opam |

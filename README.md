@@ -76,10 +76,13 @@ FFBUILD_TOOLCHAIN_MODE=ctng ./build.sh linuxarm64 gpl-shared 9.0
 可用变体：
 * `gpl` 包含全部依赖，包括要求完整 GPL 而非仅 LGPL 的部分。
 * `lgpl` 不包含仅 GPL 的库，主要是 libx264 与 libx265。
-* `nonfree` 在 gpl 变体的依赖之外额外包含 fdk-aac。
+* `nonfree` 在 gpl 变体的依赖之外额外包含 fdk-aac 与 zvbi。
 * `gpl-shared` 同 gpl，但提供 libav* 系列动态库，而非纯静态可执行文件。
 * `lgpl-shared` 同上，使用 lgpl 依赖集。
 * `nonfree-shared` 同上，使用 nonfree 依赖集。
+
+> `zvbi` 归入 `nonfree` 并非因为它属于非自由软件，而是其代码仅以 GPL-2 发布，与采用 GPL-3 的 gpl、lgpl 变体不兼容
+（上游提交 [`1626915`](../../commit/162691525a439dbec17f5d01a8d241f134b7516d)）。
 
 以上变体均可与任意附加项组合：
 * `4.3`/`4.4`/`5.0`/`5.1`/`6.0`/`6.1`/`7.0`/`7.1`/`8.0`/`8.1`/`9.0` 从对应 release 分支而非 master 构建。
@@ -118,10 +121,10 @@ FFBUILD_PROXY= ./native/download.sh                   # 不使用 shell 中的�
 ## 目录
 
 ```
-ffbuild/{prefix,destdir,work,log,state,pkgroot}   构建根（FFBUILD_ROOT）
-.buildtools/                                      托管构建工具、venv、Rust，不纳入版本控制
-.cache/downloads/                                 依赖源码缓存
-artifacts/                                        产物
+ffbuild/{prefix,destdir,work,log,state,toolchain,pkgroot}  构建根（FFBUILD_ROOT）
+.buildtools/                                               托管构建工具、venv、Rust，不纳入版本控制
+.cache/downloads/                                          依赖源码缓存
+artifacts/                                                 产物
 ```
 
 > `.buildtools/ctng/<target>` 存放各目标的 crosstool-ng 工具链。
