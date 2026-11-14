@@ -132,6 +132,10 @@ artifacts/                                                 产物
 > `FFBUILD_ROOT` 路径不能包含 `.`（上游 `libxcb`/`libglvnd` 的路径处理会失败）。  
 > `linux64` 产物与宿主 glibc 匹配；如需 glibc 2.28 基线，使用 `FFBUILD_TOOLCHAIN_MODE=ctng`（先运行 `./native/setup.sh --with-ctng`）。`win64` 与 `win32` 产物依赖 UCRT；`linuxarm64` 产物为 glibc 2.28 基线的 aarch64 ELF。
 
+## 鸣谢
+
+* [FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds)
+
 ## 许可
 
 沿用上游 [`LICENSE`](LICENSE)。

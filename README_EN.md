@@ -129,6 +129,10 @@ artifacts/                                                 build artifacts
 > `FFBUILD_ROOT` must not contain a period (this breaks path handling in `libxcb`/`libglvnd`).  
 > linux64 artifacts match the host glibc; for a glibc 2.28 baseline, use `FFBUILD_TOOLCHAIN_MODE=ctng` (run `./native/setup.sh --with-ctng` first). linuxarm64 artifacts are aarch64 ELF on a glibc 2.28 baseline. win64 and win32 artifacts use the UCRT.
 
+## Credits
+
+* [FFmpeg-Builds](https://github.com/FFmpeg-Builds/FFmpeg-Builds)
+
 ## License
 
 Same as the upstream [`LICENSE`](LICENSE).
